@@ -1,6 +1,9 @@
 import "@testing-library/jest-dom/vitest";
-import { afterEach, beforeEach, vi } from "vitest";
+import { toHaveNoViolations } from "jest-axe";
+import { expect, afterEach, beforeEach, vi } from "vitest";
 import { cleanup } from "@testing-library/react";
+
+expect.extend(toHaveNoViolations);
 
 // --- Mock SpeechRecognition (jsdom has none) ---
 export class MockSpeechRecognition {
