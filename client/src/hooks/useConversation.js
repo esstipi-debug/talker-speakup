@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { postTurn, getHealth } from "../lib/api.js";
 import {
+  createRecognizer,
   isSTTSupported,
   playAudio,
   speak,
@@ -11,35 +12,44 @@ import {
 const GREETING =
   "Hi! I'm your SpeakUp coach. Tap the mic and tell me about your day — let's practice some English.";
 
+const MAX_LISTEN_MS = 120000; // hard cap so a stuck session can't listen forever
+const MAX_EMPTY_RESTARTS = 6; // guard against tight restart loops on a silent/broken mic
+const NO_SPEECH_MSG = "Didn't catch that — try again or type.";
+
 /**
- * Owns the whole conversation loop: providers, the turn round-trip, and a
- * single playback controller for the coach voice. Speech capture + the review
- * state machine are added in a later slice.
+ * Owns the whole conversation loop: providers, the turn round-trip, a single
+ * playback controller for the coach voice, and the speech capture state
+ * machine (idle -> listening -> review -> thinking -> speaking -> idle).
  */
 export function useConversation() {
   const [messages, setMessages] = useState([{ role: "coach", text: GREETING }]);
-  const [status, setStatus] = useState("idle"); // idle|listening|review|thinking|speaking
+  const [status, setStatus] = useState("idle");
+  const [draft, setDraft] = useState(""); // finalized text, then editable in review
+  const [interim, setInterim] = useState(""); // live non-final tail during listening
   const [totalXp, setTotalXp] = useState(0);
   const [error, setError] = useState(null);
   const [providers, setProviders] = useState({ brain: null, tts: null, stt: null });
   const [ttsFallbackActive, setTtsFallbackActive] = useState(false);
-  const [draft, setDraft] = useState(""); // repopulated on error so the user can retry
 
+  const recognizerRef = useRef(null);
+  const userStoppedRef = useRef(false);
+  const fatalRef = useRef(false);
+  const listenStartRef = useRef(0);
+  const emptyRestartsRef = useRef(0);
   const currentAudioRef = useRef(null);
   const speakTimerRef = useRef(null);
+
   const statusRef = useRef("idle");
+  const draftRef = useRef("");
+  const interimRef = useRef("");
   const messagesRef = useRef(messages);
   const providersRef = useRef(providers);
 
-  useEffect(() => {
-    statusRef.current = status;
-  }, [status]);
-  useEffect(() => {
-    messagesRef.current = messages;
-  }, [messages]);
-  useEffect(() => {
-    providersRef.current = providers;
-  }, [providers]);
+  useEffect(() => { statusRef.current = status; }, [status]);
+  useEffect(() => { draftRef.current = draft; }, [draft]);
+  useEffect(() => { interimRef.current = interim; }, [interim]);
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
+  useEffect(() => { providersRef.current = providers; }, [providers]);
 
   useEffect(() => {
     warmUpVoices();
@@ -48,7 +58,7 @@ export function useConversation() {
     });
   }, []);
 
-  // --- playback controller: sole owner of currentAudioRef + speakTimerRef + speaking status ---
+  // ---------------- playback controller ----------------
   function stopPlayback() {
     if (currentAudioRef.current) {
       currentAudioRef.current.pause();
@@ -79,12 +89,12 @@ export function useConversation() {
     }
   }
 
-  // --- turn engine (shared by text + speech paths) ---
+  // ---------------- turn engine ----------------
   async function runTurn(utterance) {
     setError(null);
     const userMsg = { role: "user", text: utterance };
     const historyBefore = messagesRef.current;
-    setMessages((prev) => [...prev, userMsg]); // optimistic user bubble
+    setMessages((prev) => [...prev, userMsg]);
     setStatus("thinking");
     try {
       const { coach_reply, xp, audio, audioFormat } = await postTurn({
@@ -99,13 +109,141 @@ export function useConversation() {
       else if (audio) setTtsFallbackActive(false);
       playCoach(coach_reply, audio, audioFormat);
     } catch (err) {
-      // Optimistic rollback: drop the just-pushed user bubble, then drop into
-      // review with the text repopulated so the retry re-adds exactly one turn.
-      setMessages(historyBefore);
+      setMessages(historyBefore); // optimistic rollback (retry re-adds exactly one turn)
       setError(err.message || "The coach brain failed to respond.");
       setDraft(utterance);
       setStatus("review");
     }
+  }
+
+  // ---------------- speech capture ----------------
+  function finishListening(announceEmpty) {
+    const combined = `${draftRef.current} ${interimRef.current}`.trim();
+    setInterim("");
+    if (combined) {
+      setDraft(combined);
+      setStatus("review");
+    } else {
+      setStatus("idle");
+      if (announceEmpty) setError(NO_SPEECH_MSG);
+    }
+  }
+
+  function handleSpeechError(code) {
+    if (code === "not-allowed" || code === "service-not-allowed" || code === "audio-capture") {
+      fatalRef.current = true;
+      setError("Microphone permission denied — allow the mic or use the text box.");
+    } else if (code === "network") {
+      fatalRef.current = true;
+      setError("Speech service unavailable — try again or type.");
+    } else if (code === "no-speech" || code === "aborted") {
+      // non-fatal (paused) / self-initiated (barge-in, reRecord) — handled by onend
+    } else {
+      setError(`Speech error: ${code}`);
+    }
+  }
+
+  function handleRecognizerEnd() {
+    if (statusRef.current !== "listening") return;
+    if (fatalRef.current) {
+      fatalRef.current = false;
+      setInterim("");
+      setStatus("idle");
+      return;
+    }
+    const overTime = Date.now() - listenStartRef.current > MAX_LISTEN_MS;
+    const tooManyRestarts = emptyRestartsRef.current >= MAX_EMPTY_RESTARTS;
+    if (userStoppedRef.current || overTime || tooManyRestarts) {
+      finishListening(userStoppedRef.current || tooManyRestarts);
+      return;
+    }
+    // silence self-termination: keep listening (continuity), preserving the draft
+    emptyRestartsRef.current += 1;
+    try {
+      recognizerRef.current?.start();
+    } catch {
+      finishListening(false);
+    }
+  }
+
+  function startListening() {
+    if (statusRef.current === "listening" || statusRef.current === "thinking") return;
+    stopPlayback();
+    setError(null);
+    setDraft("");
+    setInterim("");
+    userStoppedRef.current = false;
+    fatalRef.current = false;
+    emptyRestartsRef.current = 0;
+    listenStartRef.current = Date.now();
+    const rec = createRecognizer({
+      onStart: () => setStatus("listening"),
+      onResult: (chunk) => {
+        emptyRestartsRef.current = 0;
+        setDraft((d) => `${d} ${chunk}`.trim());
+      },
+      onInterim: (tail) => setInterim(tail),
+      onError: (code) => handleSpeechError(code),
+      onEnd: () => handleRecognizerEnd(),
+    });
+    if (!rec) {
+      setError("Speech recognition isn't supported here — use the text box (Chrome/Edge work best).");
+      setStatus("idle");
+      return;
+    }
+    recognizerRef.current = rec;
+    try {
+      rec.start();
+    } catch {
+      setStatus("idle");
+    }
+  }
+
+  function stopListening() {
+    if (statusRef.current !== "listening") return;
+    userStoppedRef.current = true;
+    try {
+      recognizerRef.current?.stop();
+    } catch {
+      finishListening(true);
+    }
+  }
+
+  function editDraft(text) {
+    setDraft(text);
+  }
+
+  function send() {
+    if (statusRef.current !== "review") return;
+    const t = draftRef.current.trim();
+    if (!t) {
+      setStatus("idle");
+      return;
+    }
+    setDraft("");
+    runTurn(t);
+  }
+
+  function reRecord() {
+    if (statusRef.current !== "review") return;
+    setDraft("");
+    setInterim("");
+    startListening();
+  }
+
+  function cancel() {
+    if (statusRef.current !== "review") return;
+    recognizerRef.current?.abort?.();
+    setDraft("");
+    setInterim("");
+    setError(null);
+    setStatus("idle");
+  }
+
+  function interrupt() {
+    if (statusRef.current !== "speaking") return;
+    stopPlayback();
+    startListening();
   }
 
   function submitText(text) {
@@ -114,19 +252,37 @@ export function useConversation() {
     runTurn(t);
   }
 
-  const sttSupported = isSTTSupported();
+  function replay(message) {
+    if (statusRef.current !== "idle" || !message) return;
+    stopPlayback();
+    if (message.audio) {
+      currentAudioRef.current = playAudio(message.audio, { format: message.audioFormat });
+    } else {
+      speak(message.text);
+    }
+  }
 
   return {
     messages,
     status,
+    draft,
+    interim,
+    liveTranscript: `${draft} ${interim}`.trim(),
     totalXp,
     error,
     providers,
     ttsFallbackActive,
-    sttSupported,
-    draft,
+    sttSupported: isSTTSupported(),
     turns: messages.filter((m) => m.role === "user").length,
+    startListening,
+    stopListening,
+    editDraft,
+    send,
+    reRecord,
+    cancel,
+    interrupt,
     submitText,
+    replay,
     clearError: () => setError(null),
   };
 }
