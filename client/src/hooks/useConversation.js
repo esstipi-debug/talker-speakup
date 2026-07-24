@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { postTurn, getHealth } from "../lib/api.js";
+import { postTurn, postTurnAudio, getHealth } from "../lib/api.js";
 import {
   createRecognizer,
   isSTTSupported,
@@ -8,6 +8,7 @@ import {
   stopSpeaking,
   warmUpVoices,
 } from "../lib/speech.js";
+import { useSessionRecorder } from "../lib/useSessionRecorder";
 
 const GREETING =
   "Hi! I'm your SpeakUp coach. Tap the mic and tell me about your day — let's practice some English.";
@@ -30,6 +31,11 @@ export function useConversation() {
   const [error, setError] = useState(null);
   const [providers, setProviders] = useState({ brain: null, tts: null, stt: null });
   const [ttsFallbackActive, setTtsFallbackActive] = useState(false);
+
+  // Browser STT is the default capture path. When it's unavailable we fall back
+  // to recording audio and letting the server transcribe (POST /turn/audio).
+  const sttSupported = isSTTSupported();
+  const recorder = useSessionRecorder();
 
   const recognizerRef = useRef(null);
   const userStoppedRef = useRef(false);
@@ -159,11 +165,14 @@ export function useConversation() {
     }
     // silence self-termination: keep listening (continuity), preserving the draft
     emptyRestartsRef.current += 1;
-    try {
-      recognizerRef.current?.start();
-    } catch {
-      finishListening(false);
-    }
+    setTimeout(() => {
+      if (statusRef.current !== "listening") return; // a stop()/cancel() may have raced the deferred restart
+      try {
+        recognizerRef.current?.start();
+      } catch {
+        finishListening(false);
+      }
+    }, 0);
   }
 
   function startListening() {

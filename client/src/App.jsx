@@ -18,15 +18,22 @@ export default function App() {
   const busy = c.status === "thinking";
   const micButtonRef = useRef(null);
   const prevStatusRef = useRef(c.status);
+  const pendingMicFocusRef = useRef(false);
 
   // Return focus to the mic button when leaving review (cancel/reRecord land on
-  // an enabled button; send -> thinking leaves it disabled, where focus() is a
-  // harmless no-op). Satisfies the spec's focus-return requirement.
+  // an enabled button immediately; send -> thinking leaves it disabled, so the
+  // focus is deferred via a pending flag until the mic is focusable again).
+  // Satisfies the spec's focus-return requirement.
   useEffect(() => {
     if (prevStatusRef.current === "review" && c.status !== "review") {
-      micButtonRef.current?.focus();
+      pendingMicFocusRef.current = true;
     }
     prevStatusRef.current = c.status;
+    // Focus the mic as soon as it's rendered and enabled (it's disabled only in `thinking`).
+    if (pendingMicFocusRef.current && c.status !== "review" && c.status !== "thinking") {
+      micButtonRef.current?.focus();
+      pendingMicFocusRef.current = false;
+    }
   }, [c.status]);
 
   function handleMicClick() {

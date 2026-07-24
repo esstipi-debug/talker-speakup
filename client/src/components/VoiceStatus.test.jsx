@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import VoiceStatus from "./VoiceStatus.jsx";
 
 const base = {
@@ -41,5 +42,12 @@ describe("VoiceStatus", () => {
   it("does not render a 'synthesizing' state", () => {
     render(<VoiceStatus {...base} status="thinking" />);
     expect(screen.queryByText(/synthesiz/i)).toBeNull();
+  });
+
+  it("clicking the dismiss button calls onDismissError", async () => {
+    const onDismissError = vi.fn();
+    render(<VoiceStatus {...base} error="Microphone permission denied" onDismissError={onDismissError} />);
+    await userEvent.click(screen.getByRole("button", { name: /dismiss error/i }));
+    expect(onDismissError).toHaveBeenCalledTimes(1);
   });
 });

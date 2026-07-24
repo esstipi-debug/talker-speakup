@@ -3,6 +3,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 
 let recHandlers = null;
 let nextRecognizerNull = false; // flip true to force createRecognizer -> null once
+let nextStartThrows = false; // flip true to force the next recognizer.start() -> throw once
 
 vi.mock("../lib/api.js", () => ({
   postTurn: vi.fn(),
@@ -24,7 +25,13 @@ vi.mock("../lib/speech.js", async () => {
       }
       recHandlers = handlers;
       return {
-        start: () => handlers.onStart?.(),
+        start: () => {
+          if (nextStartThrows) {
+            nextStartThrows = false;
+            throw new Error("InvalidStateError");
+          }
+          handlers.onStart?.();
+        },
         stop: () => handlers.onEnd?.(),
         abort: () => {},
       };
@@ -41,6 +48,9 @@ beforeEach(() => {
   postTurn.mockReset();
   playAudio.mockClear();
   speak.mockClear();
+  stopSpeaking.mockClear();
+  nextRecognizerNull = false;
+  nextStartThrows = false;
 });
 
 describe("useConversation — text path", () => {
@@ -53,6 +63,12 @@ describe("useConversation — text path", () => {
     // user bubble optimistic
     expect(result.current.messages.at(-1)).toMatchObject({ role: "user", text: "I went hiking" });
     expect(result.current.status).toBe("thinking");
+    expect(postTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        utterance: "I went hiking",
+        history: expect.arrayContaining([{ role: "user", text: "I went hiking" }]),
+      }),
+    );
 
     await waitFor(() => expect(result.current.status).toBe("speaking"));
     expect(result.current.messages.at(-1)).toMatchObject({ role: "coach", text: "Nice!" });
@@ -137,6 +153,43 @@ describe("useConversation — speech machine", () => {
     expect(result.current.status).toBe("listening");
   });
 
+  it("finalizes with the no-speech message after MAX_EMPTY_RESTARTS consecutive empty auto-restarts", async () => {
+    const { result } = await mounted();
+    act(() => result.current.startListening());
+    for (let i = 0; i < 6; i++) act(() => recHandlers.onEnd()); // counter 0->6, guard not yet tripped
+    expect(result.current.status).toBe("listening");
+    act(() => recHandlers.onEnd()); // 7th empty auto-onEnd trips the guard -> finalize
+    expect(result.current.status).toBe("idle");
+    expect(result.current.error).toMatch(/didn't catch that/i);
+  });
+
+  it("onResult resets the empty-restart counter so speech mid-session doesn't trip the guard", async () => {
+    const { result } = await mounted();
+    act(() => result.current.startListening());
+    for (let i = 0; i < 5; i++) act(() => recHandlers.onEnd()); // counter -> 5
+    act(() => recHandlers.onResult("hello")); // resets counter to 0
+    for (let i = 0; i < 6; i++) act(() => recHandlers.onEnd()); // counter -> 6, under threshold
+    expect(result.current.status).toBe("listening");
+  });
+
+  it("finalizes instead of looping when the continuity restart's start() throws", async () => {
+    // mounted() awaits testing-library's real-timer waitFor for the health-check
+    // effect, which vitest fake timers don't drive without shouldAdvanceTime — so
+    // mount first, then switch to fake timers only for the deferred-restart tick.
+    const { result } = await mounted();
+    vi.useFakeTimers();
+    try {
+      act(() => result.current.startListening()); // first start() succeeds (onStart -> listening)
+      nextStartThrows = true;
+      act(() => recHandlers.onEnd());          // empty draft, userStopped=false -> schedules deferred restart
+      act(() => vi.advanceTimersByTime(1));     // run the setTimeout(0) -> start() throws -> catch -> finishListening(false)
+      expect(result.current.status).toBe("idle");
+      expect(result.current.error).toBeNull();  // finishListening(false): no announceEmpty
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("send posts the edited draft and clears it", async () => {
     postTurn.mockResolvedValue({ coach_reply: "Great", xp: 8, audio: "AAAA", audioFormat: "mp3" });
     const { result } = await mounted();
@@ -148,6 +201,12 @@ describe("useConversation — speech machine", () => {
     expect(result.current.messages.at(-1)).toMatchObject({ role: "user", text: "I like it a lot" });
     await waitFor(() => expect(result.current.status).toBe("speaking"));
     expect(result.current.draft).toBe("");
+    expect(postTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        utterance: "I like it a lot",
+        history: expect.arrayContaining([{ role: "user", text: "I like it a lot" }]),
+      }),
+    );
   });
 
   it("barge-in during speaking stops playback and re-enters listening", async () => {
@@ -155,9 +214,26 @@ describe("useConversation — speech machine", () => {
     const { result } = await mounted();
     act(() => result.current.submitText("hello"));
     await waitFor(() => expect(result.current.status).toBe("speaking"));
+    const before = stopSpeaking.mock.calls.length;
     act(() => result.current.interrupt());
-    expect(stopSpeaking).toHaveBeenCalled();
+    expect(stopSpeaking.mock.calls.length).toBeGreaterThan(before);
     expect(result.current.status).toBe("listening");
+  });
+
+  it("barge-in clears the stale speak-timeout so a late toIdle cannot fire after re-entering listening", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      postTurn.mockResolvedValue({ coach_reply: "Great", xp: 8, audio: "AAAA", audioFormat: "mp3" });
+      const { result } = await mounted();
+      act(() => result.current.submitText("hello"));
+      await vi.waitFor(() => expect(result.current.status).toBe("speaking"));
+      act(() => result.current.interrupt());
+      expect(result.current.status).toBe("listening");
+      act(() => vi.advanceTimersByTime(10000)); // well past the >=4s fallback
+      expect(result.current.status).toBe("listening"); // stale toIdle must not fire
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("replay is only allowed from idle and does not change state", async () => {
