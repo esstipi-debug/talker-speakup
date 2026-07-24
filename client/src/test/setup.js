@@ -76,6 +76,8 @@ beforeEach(() => {
   // jsdom's HTMLMediaElement.play() is unimplemented — make it a resolved Promise.
   window.HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
   window.HTMLMediaElement.prototype.pause = vi.fn();
+  // jsdom has no layout engine, so Element.scrollTo is unimplemented.
+  window.Element.prototype.scrollTo = vi.fn();
 });
 
 afterEach(() => {
