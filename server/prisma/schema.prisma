@@ -1,0 +1,69 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Session {
+  id         String    @id @default(cuid())
+  scenarioId String?
+  scenario   Scenario? @relation(fields: [scenarioId], references: [id])
+  startedAt  DateTime  @default(now())
+  endedAt    DateTime?
+  summary    String?
+  turns      Turn[]
+}
+
+model Turn {
+  id         String   @id @default(cuid())
+  sessionId  String
+  session    Session  @relation(fields: [sessionId], references: [id])
+  role       String // "coach" | "user"
+  text       String
+  fluency    Int?
+  confidence Int?
+  xp         Int?
+  createdAt  DateTime @default(now())
+}
+
+model ErrorLedger {
+  id          String   @id @default(cuid())
+  type        String // "grammar" | "vocab" | "register" | "pronunciation"
+  pattern     String   @unique // clave para upsert
+  example     String?
+  explanation String?
+  frequency   Int      @default(1)
+  status      String   @default("active") // "active" | "improving" | "resolved"
+  lastSeenAt  DateTime @default(now())
+  createdAt   DateTime @default(now())
+}
+
+model VocabItem {
+  id           String   @id @default(cuid())
+  term         String   @unique
+  context      String?
+  timesSeen    Int      @default(1)
+  nextReviewAt DateTime @default(now()) // repetición espaciada (SM-2 simple)
+  createdAt    DateTime @default(now())
+}
+
+model Scenario {
+  id           String    @id @default(cuid())
+  title        String
+  goal         String
+  domain       String?
+  customPrompt String?
+  active       Boolean   @default(true)
+  sessions     Session[]
+}
+
+model Progress {
+  id            String   @id @default(cuid())
+  date          DateTime @default(now())
+  sessionsCount Int      @default(0)
+  avgFluency    Float?
+  avgConfidence Float?
+}

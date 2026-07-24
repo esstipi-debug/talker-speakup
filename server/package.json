@@ -1,0 +1,22 @@
+{
+  "name": "speakup-server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node --env-file=.env --watch src/index.js",
+    "start": "node --env-file=.env src/index.js",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:studio": "prisma studio"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.3",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "multer": "^2.2.0"
+  },
+  "devDependencies": {
+    "prisma": "^6.19.3"
+  }
+}
