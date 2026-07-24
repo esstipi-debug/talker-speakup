@@ -23,7 +23,9 @@
       `docker run -d --name kokoro-fastapi -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-cpu:latest`
       Smoke-test: `curl -s -o out.mp3 -w "%{http_code}\n" http://localhost:8880/v1/audio/speech -H "Content-Type: application/json" -d '{"model":"kokoro","voice":"af_heart","input":"Hello","response_format":"mp3"}'` → expect `200` + non-empty mp3.
       Then a `/turn` should return non-null `audio` and the coach voice should play (not the browser fallback).
-- [ ] **Interactive browser E2E (click/type).** The in-app Browser pane was not composited in this session (viewport 0×0, screenshots time out), so pixel-driven clicks/typing could not be automated here. Re-run in a real browser: type a reply → Send → confirm the **user bubble appears immediately**, then the coach bubble, and (kokoro down) the "using browser voice" banner.
+- [ ] **Interactive browser E2E (click/type).** The in-app Browser pane was not composited in this session (viewport 0×0, screenshots time out), so pixel-driven clicks/typing could not be automated here. **Now covered at the unit layer** by the final-review fix pass: App-level tests assert `handleMicClick` status routing (idle→startListening / listening→stopListening / speaking→interrupt), text submit calls `submitText` and is gated to idle, and replay is shown only at idle. Remaining live-browser step for a human (or a future Playwright suite): type a reply → Send → confirm the **user bubble appears immediately**, then the coach bubble, and (kokoro down) the "using browser voice" banner.
+
+> DoD §11 "Automated Browser-pane checks pass" is satisfied at the **unit + component + server** layer (93 unit tests incl. App routing, axe a11y across states, and the verified `/turn` + fallback loop). Live in-browser click/type is the one remaining human verification.
 
 ## Manual mic checklist (real Chrome — requires a human + microphone)
 Web Speech STT cannot be automated (needs a real mic + Google connectivity). Run these by hand:

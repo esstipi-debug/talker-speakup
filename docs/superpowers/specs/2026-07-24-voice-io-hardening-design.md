@@ -105,7 +105,7 @@ Owns all conversation state and side effects; App.jsx becomes a thin renderer.
 - **Error surface model** (removes the single-`error`-vs-VoiceStatus ambiguity):
   - **`error` string** — transient per-turn failures only: Brain 502, empty draft, Web Speech `no-speech`/`network`, mic error / permission-denied. Mic-permission-denied lives **here only** (not duplicated as a separate VoiceStatus banner).
   - **VoiceStatus (derived/persistent)** — capability + status: `no-Web-Speech` (from `isSTTSupported()`), live status/interim line, optional provider info.
-  - **One-time notice** — the coach-voice fallback event (see §7 predicate), event-driven, not derived from providers.
+  - **Fallback indicator** — the coach-voice fallback (see §7 predicate). *Implementation note (2026-07-24): shipped as a sticky `ttsFallbackActive` flag — set when a turn returns null audio for a server-configured provider, cleared when a later turn returns real audio — rendered as a persistent banner, rather than a deduped one-time event. It self-clears and has no dismiss control; the keyboard-reachable dismiss in §5.5 applies to the transient error banner.*
 - **Encapsulates:** recognition (`speech.js`), turn API (`api.js` `postTurn`), playback (`speech.js` `playAudio`/`speak`), and fallback selection.
 - **Rationale:** the new review/interim/barge-in/replay logic would make the already-dense `App.jsx` unmaintainable and untestable. Extracting yields a unit testable with a mocked recognizer + fetch, and is the natural attach point for Harper feedback later.
 

@@ -5,6 +5,10 @@ node_modules/
 dist/
 client/dist/
 
+# test coverage reports
+coverage/
+client/coverage/
+
 # env & secrets
 .env
 **/.env
