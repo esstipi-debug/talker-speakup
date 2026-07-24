@@ -14,25 +14,41 @@ export function isTTSSupported() {
 }
 
 /**
- * Create a one-shot recognizer. Caller starts it with .start() and stops/aborts as needed.
- * Returns null if the browser doesn't support Web Speech (use the text fallback then).
+ * Create a continuous recognizer. It keeps listening across pauses until the
+ * caller stops it. Emits each NEWLY finalized segment via onResult(chunk) and
+ * the current non-final tail via onInterim(tail). Returns null if the browser
+ * lacks Web Speech (use the text fallback then).
  */
-export function createRecognizer({ lang = "en-US", onResult, onError, onEnd } = {}) {
+export function createRecognizer({
+  lang = "en-US",
+  onResult,
+  onInterim,
+  onStart,
+  onError,
+  onEnd,
+} = {}) {
   const Ctor = getRecognitionCtor();
   if (!Ctor) return null;
 
   const rec = new Ctor();
   rec.lang = lang;
-  rec.interimResults = false;
+  rec.interimResults = true;
+  rec.continuous = true;
   rec.maxAlternatives = 1;
-  rec.continuous = false;
 
+  rec.onstart = () => onStart?.();
   rec.onresult = (event) => {
-    const transcript = Array.from(event.results)
-      .map((r) => r[0]?.transcript ?? "")
-      .join(" ")
-      .trim();
-    onResult?.(transcript);
+    let finalizedChunk = "";
+    let interimTail = "";
+    for (let i = event.resultIndex; i < event.results.length; i += 1) {
+      const res = event.results[i];
+      const text = res[0]?.transcript ?? "";
+      if (res.isFinal) finalizedChunk += text;
+      else interimTail += text;
+    }
+    const finalTrimmed = finalizedChunk.trim();
+    if (finalTrimmed) onResult?.(finalTrimmed);
+    onInterim?.(interimTail.trim());
   };
   rec.onerror = (event) => onError?.(event.error || "speech-error");
   rec.onend = () => onEnd?.();
@@ -104,3 +120,6 @@ export function playAudio(base64, { format = "mp3", onStart, onEnd, onError } = 
   audio.play().catch(() => (onError ? onError() : onEnd?.()));
   return audio;
 }
+
+// Exposed for unit tests only.
+export const pickEnglishVoiceForTest = pickEnglishVoice;
