@@ -48,7 +48,7 @@ export default function StatHeader({ totalXp = 0, turns = 0, brain, tts, stt }) 
           )}
           {tts && (
             <span
-              title="active coach voice"
+              title="configured coach voice"
               className={`text-[10px] uppercase tracking-wide px-2 py-1 rounded-full border ${
                 tts === "kokoro"
                   ? "border-coach/50 text-coach-soft"
