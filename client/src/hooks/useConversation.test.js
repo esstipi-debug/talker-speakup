@@ -221,18 +221,45 @@ describe("useConversation — speech machine", () => {
   });
 
   it("barge-in clears the stale speak-timeout so a late toIdle cannot fire after re-entering listening", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // Why not assert on firing (advance timers, check status)? toIdle is
+    // self-guarded (`s === "speaking" ? "idle" : s`), so a stale timer firing
+    // while status is "listening" is already a harmless no-op — that's exactly
+    // why the old version of this test passed even with the clearTimeout call
+    // deleted. And a *second* speaking turn can't expose it either: playCoach()
+    // itself unconditionally does `clearTimeout(speakTimerRef.current)` before
+    // arming its own timer, so turn 2 would silently cancel turn 1's stale timer
+    // regardless of whether stopPlayback() ever cleared it — any two-turn
+    // "does turn 1 wrongly idle turn 2" scenario is masked by that redundant
+    // clear and can never fail even with the fix reverted. The only assertion
+    // that actually pins the regression is a direct one: barge-in must cancel
+    // the exact timer id armed for the interrupted turn.
+    postTurn.mockResolvedValue({ coach_reply: "Great", xp: 8, audio: "AAAA", audioFormat: "mp3" });
+    const { result } = await mounted();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
     try {
-      postTurn.mockResolvedValue({ coach_reply: "Great", xp: 8, audio: "AAAA", audioFormat: "mp3" });
-      const { result } = await mounted();
       act(() => result.current.submitText("hello"));
-      await vi.waitFor(() => expect(result.current.status).toBe("speaking"));
+      await waitFor(() => expect(result.current.status).toBe("speaking"));
+
+      // Identify playCoach()'s own setTimeout call by its exact fallback delay
+      // (max(4000, wordCount*450+2500) for the 1-word reply "Great" == 4000ms)
+      // rather than by position, so unrelated setTimeout calls (e.g. from
+      // testing-library's own waitFor polling) can't shift the wrong id in.
+      const fallbackMs = Math.max(4000, "Great".split(/\s+/).length * 450 + 2500);
+      const armedCallIndex = setTimeoutSpy.mock.calls.findIndex(([, delay]) => delay === fallbackMs);
+      expect(armedCallIndex).toBeGreaterThan(-1);
+      const armedTimerId = setTimeoutSpy.mock.results[armedCallIndex].value;
+
       act(() => result.current.interrupt());
       expect(result.current.status).toBe("listening");
-      act(() => vi.advanceTimersByTime(10000)); // well past the >=4s fallback
-      expect(result.current.status).toBe("listening"); // stale toIdle must not fire
+
+      // This fails if `clearTimeout(speakTimerRef.current)` is removed from
+      // stopPlayback(): barge-in must cancel the stale timer itself, not rely
+      // on the status guard or a later turn to clean up after it.
+      expect(clearTimeoutSpy).toHaveBeenCalledWith(armedTimerId);
     } finally {
-      vi.useRealTimers();
+      setTimeoutSpy.mockRestore();
+      clearTimeoutSpy.mockRestore();
     }
   });
 
