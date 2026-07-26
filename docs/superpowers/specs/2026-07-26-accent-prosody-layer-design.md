@@ -65,10 +65,13 @@ A learner with C1–C2 ambitions can, in ~7 minutes a day, practise English rhyt
 | D7 | Curriculum | **Curated units + deterministic phonetics + ledger targeting** | The LLM may propose sentences; it never decides phonetics |
 | D8 | Per-turn snapshot | **Scripted "echo moments" only** | See §3.1 |
 | D9 | Manual effort | **Validation (~2 h) + full curriculum review** | See §6 and §13 (K3). The one thing no agent can substitute |
+| D10 | Pronunciation coverage | **Widened** — lexical stress on *every* word, echo on *any* eligible coach line, 60 minimal pairs | See §3.2 |
 
 ### 3.1 Why the free-turn snapshot was cut
 
 The original design put stress dots under every conversational turn, computed in-browser. Research killed it:
+
+*(Read §3.2 first if the question on your mind is "does this actually catch mispronunciations".)*
 
 - The energy-envelope syllable-nuclei detector **misses unstressed syllables**, and misses them *harder* the more syllable-timed the speech is. On an L1-Spanish speaker the metric can move **opposite to the truth**.
 - De Jong & Wempe (2009) is **not streamable** — its threshold is a global statistic over the whole file.
@@ -76,6 +79,35 @@ The original design put stress dots under every conversational turn, computed in
 - Windows 11 **Voice Focus / per-device AGC** run *below* the browser. No `getUserMedia` constraint reaches them, and AGC continuously renormalises exactly the loudness signal the envelope reads.
 
 The only live-safe metric without alignment is the **silent-pause profile**. Everything else moved to scripted contexts, where a reference sentence exists and forced alignment is valid.
+
+### 3.2 Does this identify pronunciation errors?
+
+Asked directly by the user, and the honest answer required widening the design. What the layer does and does not catch:
+
+**Identifies:**
+
+| What | Where | Gated on |
+|---|---|---|
+| Which syllable you stressed, on **every polysyllabic word** — *"you said ADmirable, it's adMIrable"* | Gym + echo | K3 |
+| Stressed/unstressed vowel proportion (failure to reduce) | Gym + echo | K3 |
+| Function words produced in their strong form | Gym + echo | K3 |
+| Nuclear stress on the wrong word | Gym + echo, **annotated sentences only** | K3 |
+| Specific phoneme confusions — ship/sheep, vet/bet, zoo/Sue | Gym | **K4**, and only the 60 curated pairs |
+| Where you breathe | Free conversation | — |
+
+**Does not identify:**
+
+- Any mispronunciation in **free conversation**. Nothing catches it.
+- Any phoneme error **outside the 60 curated pairs**.
+- Wrong vowel *quality* where placement was right — M-LEX detects which syllable won, not whether the vowel was the right colour.
+
+**Why the gap is deliberate, not lazy:** the best published F1 for open-vocabulary phone-level mispronunciation detection on L2 speech is **61–63%** (GOP variants 42–45%). A detector that is right six times in ten is not help, it is noise carrying authority. Binary discrimination against a known target is a categorically easier problem, which is why the segmental side is a curated list rather than a transcriber.
+
+**Three widenings adopted (D10)**, all near-zero engine cost:
+
+1. **Lexical stress on every word** (M-LEX, §5.2) — the MFA dictionary carries the stress digit for all 199,858 entries, so checking every polysyllabic word costs nothing beyond what M3 already computes. This is the single biggest gain in genuine pronunciation coverage in the spec, and it was missed in the first draft.
+2. **Echo on any eligible coach line** (§7.3) rather than a curated set.
+3. **60 minimal pairs** instead of 24 — curriculum work, not engine work.
 
 ---
 
@@ -102,7 +134,7 @@ mic ─► micStream.js ─┬─► Web Speech (processLocally:true) ─► tra
 
 ### 4.2 Path 2 — Echo moment (scripted, in conversation)
 
-The coach offers *"say it with me"* on a curated line. A reference sentence exists ⇒ alignment is valid.
+The coach offers *"say it with me"* on one of its own lines. A reference sentence exists ⇒ alignment is valid. Eligibility is decided from the **stress lexicon** (§6.2), not from a curated whitelist.
 
 ```
 Kokoro models ─► record ─► PCM 16 kHz ─► /pron/score ─► alignment ─► stress dots (D)
@@ -176,6 +208,10 @@ Ordered by evidential strength, not by how impressive they look.
 
 **M3-ext — Function-word weak forms.** Monosyllabic function words have no word-internal ratio, so M3 cannot reach *to / for / and* — which is precisely where residual signal lives at C1–C2. Extension, not a new engine: compute `dur(vowel)` against the **sentence's** stressed-vowel mean, from the same phone tier. Zero new dictionary surface.
 
+**M-LEX — Lexical stress placement.** *Every polysyllabic word in every scripted sentence.* Mechanically this is M3 plus an argmax: forced alignment gives boundaries under the *dictionary* pronunciation, so if the expected-stressed vowel is shorter than an expected-unstressed one in the same word, the learner put the stress somewhere else — and the argmax says where. Duration-primary, so it survives K2 failing (the intensity term is optional; F0 is a tie-break).
+
+Verdict is **binary with an abstain**, and it is the most directly "did I say this word right" signal in the milestone. Constraints: monosyllables excluded by definition; words carrying secondary stress (ARPAbet digit `2`) are excluded from v1 rather than modelled; and M-LEX says nothing about **vowel quality** — a learner can put the stress in the right place and still produce the wrong vowel. Do not let the copy imply otherwise.
+
 **M4 — Nuclear stress placement.** Binary hit/miss against a pre-annotated nucleus. Prominence estimator combines F0 excursion, duration and intensity — **weights, normalisation and the abstain condition must be pinned in the implementation plan.** Drops the intensity term if K2 fails. **Never attempted on free turns.** Ships only if K3 passes.
 
 **M5 — VarcoV.** *Hidden progress index, never displayed.* `100 × SD(vocalic durations) / mean(vocalic durations)`. Three hard constraints: (a) store `sentenceId` with every score and **never average across prompts** — sentence materials dominate the variance above speaker; (b) **delta-from-own-baseline only**; (c) **not comparable to published values** — those are hand-segmented on stimuli built to exclude /j w r l/. Drives a trend line on the 6 PROBE sentences and nothing else. `comparableToPublished` is hardcoded `false`.
@@ -202,7 +238,19 @@ Static JSON committed at build time. LLM-drafted, human-passed (D7: the LLM prop
 |---|---|---|
 | **PROBE** | 6 | Fixed. Re-read weekly. The **only** units whose `rhythmIndex` is ever stored or plotted |
 | **PRACTICE** | 20 | `rhythmIndex: null`. Free to rotate. Weighted toward function-word density |
-| **Minimal pairs** | 24 | Generated from `CUNY-CL/wikipron` (Apache-2.0), human-passed. **Only if K4 passes** |
+| **Minimal pairs** | 60 | Generated from `CUNY-CL/wikipron` (Apache-2.0), human-passed. **Only if K4 passes** — do not author them before K4 resolves |
+
+### 6.2 The stress lexicon
+
+A build-time asset, `server/src/curriculum/stress-lexicon.json`, derived from the MFA dictionary: `word → { syllables, stressIndex }`. Pruned to the curriculum plus the most frequent ~20k words (~300 KB); the full 199,858 entries are available if size proves not to matter.
+
+It exists because three things need stress data **without the sidecar running**:
+
+1. **Echo eligibility** — a coach line is offerable iff every word resolves. If any word is missing, the offer is simply not made. This replaces the curated echo whitelist (D10) and is what widens scoring from a fixed set to most of what the coach actually says.
+2. **The `da-DA-da-da-DA` notation and the bolded model sentence** — the whole model step must render when the scorer is offline.
+3. **M-LEX's expected stress index.**
+
+Two constraints. **Nucleus annotation is not derivable** — M4 therefore runs only on the annotated PROBE/PRACTICE sets, never on ad-hoc echo lines, which get M3, M3-ext and M-LEX only. And the lexicon and the sidecar must be generated from the **same dictionary version**, or the expected stress index and the phone tier can disagree; pin it and assert the version at startup.
 
 **Deaccenting** enters as curriculum *shape*, not a new metric: two-sentence pairs where sentence 2 repeats a noun from sentence 1; apply M4's estimator to the known-given word with target = **not** max prominence. Binary, abstains when M4 abstains, free.
 
@@ -261,7 +309,7 @@ New contrasts get **one** stored `l1Anchor` string, shown once, never generated:
 |---|---|
 | `pron:reduce:{word}` | M3 ratio failure on a polysyllable |
 | `pron:weakform:{word}` | M3-ext failure on a monosyllabic function word |
-| `pron:lexstress:{word}` | Stress on the wrong syllable |
+| `pron:lexstress:{word}` | M-LEX: stress on the wrong syllable — **any** polysyllabic word, not just curriculum cognates |
 | `pron:nuclear:{contextType}` | `contrastive` \| `given-info` \| `final-default` — **three rows total** |
 | `pron:seg:{EXPECTED}>{PRODUCED}` | Minimal-pair `'substituted'` — only if K4 passed |
 
@@ -274,6 +322,8 @@ Upsert on every **non-abstained** failure; `frequency++`. A drill is only *sched
 ### 7.3 The echo moment
 
 Deterministic client-side policy in `useConversation` (the server is stateless). Offer on the **first eligible reply once ≥4 turns have passed since the last offer, max 3 per session** — a `turnIndex % 5` modulus would silently cost five turns whenever the reply is the wrong length. Inline button on the last coach bubble; never a modal, never during `speaking`/`thinking`.
+
+**Eligible** means, in order: the line is 4–12 words; **every word resolves in the stress lexicon** (§6.2); and it contains at least one polysyllabic word or one reducible function word, so there is something to be right or wrong about. Any word missing ⇒ no offer, silently. This is what turns the echo moment from a fixed script into coverage of most of what the coach actually says — at the cost that **M4 does not run on ad-hoc lines** (no nucleus annotation); they are scored on M3, M3-ext and M-LEX.
 
 Renders stress dots (D): target row vs your row, mismatches ringed with an `×` glyph — **size + fill, two channels, never a colour swap**. Ledger write identical to the Gym.
 
@@ -427,11 +477,11 @@ Each has its descope clause written **in advance**, so the decision is arithmeti
 |---|---|---|---|
 | **1** | `micStream.js` + AudioWorklet + pause profile, one sentence under the learner's bubble. **No sidecar, no Docker, no Prisma** | The clock/anchor design and the endpoint-anchored placement classifier; StrictMode-safe capture | Worklet emits in **both** `vite dev` and `vite build`; all 40 hook tests green with the third `vi.mock`; `coverage.include` extended in the same commit; a test asserts the worklet ring is **not** reset by a recognizer restart |
 | **2** | Persistence spine: `db.js`, `app.js`/`index.js` split, Vitest on the server, root `test` script, `Session`/`Turn` written for the first time | That Prisma works and the server is testable | `npm test` at root runs both suites; a conversation writes a `Session` and its `Turn`s |
-| **3** | Sidecar walking skeleton: Docker image, `/pron/score` returning a phone tier for one hardcoded WAV, the `pronunciation/` factory with `none` first-class, multipart transport, `/pron` proxy line. No metrics, no UI | The transport contract and the degrade path end-to-end | A phone tier round-trips; killing the container yields `{scored:false, reason:'scorer-offline'}` and the UI stays alive |
-| **4** | **Gym v0.** View toggle, 6 hardcoded units, model → record → ribbon + imperative sentence + hum A/B → unlimited re-attempt with ghost track. `GymAttempt` persisted | The milestone's actual promise, in an isolated screen with zero conversation-state-machine risk. **K3's test-retest runs here on real audio** | The M3 ratio's within-sentence SD across 5 reads clears K3's threshold. If not, the ribbon ships without a verdict and work stops to recalibrate |
+| **3** | Sidecar walking skeleton: Docker image, `/pron/score` returning a phone tier for one hardcoded WAV, the `pronunciation/` factory with `none` first-class, multipart transport, `/pron` proxy line. **Plus the stress lexicon (§6.2) generated from the pinned dictionary.** No metrics, no UI | The transport contract and the degrade path end-to-end | A phone tier round-trips; killing the container yields `{scored:false, reason:'scorer-offline'}` and the UI stays alive; the lexicon resolves a sample coach line with the sidecar stopped |
+| **4** | **Gym v0.** View toggle, 6 hardcoded units, model → record → ribbon + imperative sentence + hum A/B → unlimited re-attempt with ghost track. **M3, M3-ext and M-LEX scored.** `GymAttempt` persisted | The milestone's actual promise, in an isolated screen with zero conversation-state-machine risk. **K3's test-retest runs here on real audio** | The M3 ratio's within-sentence SD across 5 reads clears K3's threshold. If not, the ribbon ships without a verdict and work stops to recalibrate |
 | **5** | Ledger + spacing: `ErrorLedger` writes, the `nextDrillAt` ladder, the 6-item daily set | That the loop has memory — what makes it teaching rather than measuring | A Monday failure reappears Tuesday; a clean pass doesn't |
 | **6** | Beat karaoke (C) + `useReducedMotion` | Presentation only, on a step that already works | Both `prefers-reduced-motion` branches asserted; `StatHeader` + the new SVG in the a11y suite |
-| **7** | Echo moment: the `"echo"` status member, `useEchoMoment`, stress dots (D), the offer policy | The bridge from Gym to conversation; reuses slice 4's scoring path unchanged | An echo attempt never appears in `messages` and never reaches the history window; Skip works from `interrupt()` |
+| **7** | Echo moment: the `"echo"` status member, `useEchoMoment`, stress dots (D), the offer policy, **lexicon-based eligibility on ad-hoc coach lines** | The bridge from Gym to conversation; reuses slice 4's scoring path unchanged | An echo attempt never appears in `messages` and never reaches the history window; Skip works from `interrupt()`; an OOV line silently produces no offer |
 | **8** | Minimal pairs — **only if K4 passed** | The one categorical claim in the system | — |
 
 Slices 1–2 need **no Docker at all**. The riskiest dependency is discovered before the schema, the curriculum and the visualisations are committed to it. Minimal pairs go last because they are the only component whose failure costs nothing already shipped.
@@ -480,6 +530,8 @@ Writing one plan for all eight slices now would be writing fiction for the secon
 ## 17. Deferred to the implementation plan
 
 - M4's prominence estimator: exact weights, normalisation, tie-break and abstain condition.
+- M-LEX's argmax margin: how much shorter the expected-stressed vowel must be before it counts as a stress error rather than noise, and the abstain condition when two syllables are within the margin.
+- The stress-lexicon prune list (which ~20k words) and the dictionary-version assertion at startup.
 - `alignmentConfidence`: what quantity it is computed from, and the two cut-offs for syllable→word→nothing.
 - Minimal-pair `margin`: calibration procedure and the two thresholds separating `borderline` from `unclear`.
 - Browser F0 configuration: voiced/unvoiced clarity cut-off, Hz search range, post-filter, and behaviour when >X% of frames are unvoiced.
