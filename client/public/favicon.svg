@@ -1,6 +1,6 @@
 <svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="SpeakUp">
   <defs>
-    <linearGradient id="ring" x1="11" y1="41" x2="53" y2="21" gradientUnits="userSpaceOnUse">
+    <linearGradient id="ring" x1="9" y1="40" x2="55" y2="20" gradientUnits="userSpaceOnUse">
       <stop offset="0%" stop-color="#8b6cff" />
       <stop offset="46%" stop-color="#b9a6ff" />
       <stop offset="100%" stop-color="#2ee6a6" />
@@ -11,16 +11,18 @@
     </linearGradient>
   </defs>
 
-  <rect width="64" height="64" rx="14" fill="#15101f" />
+  <rect width="64" height="64" rx="12" fill="#15101f" />
 
-  <!-- Simplified for small sizes: heavier ring, 3 bars instead of 5.
-       The 5-bar mark mushes below ~24px; docs/brand/mark.svg keeps it. -->
-  <path d="M14.4 42.4A21 21 0 1 1 23.5 50.2L14 51.8Z"
-        stroke="url(#ring)" stroke-width="5" stroke-linejoin="round" />
+  <!-- Deliberately overweight vs docs/brand/mark.svg: 3 bars instead of 5, a
+       heavier ring and only ~5% margin. A tab icon is 16 device pixels total,
+       so legibility beats elegance. Keep in sync with FAVICON in
+       docs/brand/generate-icons.py, which rasterizes this to favicon.ico. -->
+  <path d="M11.648 41.75A23.5 23.5 0 1 1 22.818 51.632L7.627 57.069Z"
+        stroke="url(#ring)" stroke-width="7" stroke-linejoin="round" />
 
   <g fill="url(#bar)">
-    <rect x="20.5" y="23" width="5" height="15" rx="2.5" />
-    <rect x="29.5" y="17.5" width="5" height="26" rx="2.5" />
-    <rect x="38.5" y="23" width="5" height="15" rx="2.5" />
+    <rect x="18" y="22" width="7" height="16" rx="3.5" />
+    <rect x="28.5" y="16.5" width="7" height="27" rx="3.5" />
+    <rect x="39" y="22" width="7" height="16" rx="3.5" />
   </g>
 </svg>

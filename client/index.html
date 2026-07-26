@@ -3,7 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- .ico first for Safari and anything without SVG favicon support;
+         browsers that understand image/svg+xml prefer the vector below it. -->
+    <link rel="icon" href="/favicon.ico" sizes="32x32" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="description" content="A local-first English speaking coach. You talk, it listens and answers out loud." />
     <!-- The UI is dark-only; tell the UA so scrollbars and form controls match. -->
     <meta name="color-scheme" content="dark" />

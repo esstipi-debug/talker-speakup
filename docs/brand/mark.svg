@@ -15,8 +15,10 @@
 
   <rect width="160" height="160" rx="32" fill="#15101f" />
 
-  <!-- speech bubble: a ring that deviates into a pointed tail at 7 o'clock -->
-  <path d="M35.6 108.9A53 53 0 1 1 58.4 128.4L34.5 132.5Z"
+  <!-- Speech bubble: a ring that deviates into a pointed tail at 7 o'clock.
+       The tail has to clear the stroke width by ~1.5x or it reads as a blunt
+       notch instead of a point — hence the tip at 1.45r, not 1.2r. -->
+  <path d="M34.1 106.5A53 53 0 1 1 59.29 128.79L28.58 137.11Z"
         stroke="url(#ring)" stroke-width="9" stroke-linejoin="round" />
 
   <!-- waveform: your turn -->
