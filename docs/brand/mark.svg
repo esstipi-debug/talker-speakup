@@ -1,27 +1,30 @@
 <svg width="160" height="160" viewBox="0 0 160 160" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="SpeakUp mark">
   <defs>
-    <linearGradient id="rim" x1="16" y1="20" x2="144" y2="146" gradientUnits="userSpaceOnUse">
+    <!-- ring: violet (left) blending through periwinkle into mint (right) -->
+    <linearGradient id="ring" x1="27" y1="104" x2="133" y2="52" gradientUnits="userSpaceOnUse">
       <stop offset="0%" stop-color="#8b6cff" />
-      <stop offset="55%" stop-color="#b9a6ff" />
+      <stop offset="46%" stop-color="#b9a6ff" />
       <stop offset="100%" stop-color="#2ee6a6" />
     </linearGradient>
-    <linearGradient id="wave" x1="39" y1="36" x2="121" y2="100" gradientUnits="userSpaceOnUse">
+    <!-- bars: amber at the top, violet at the foot — per-bar, so the short ones show the full range -->
+    <linearGradient id="bar" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0%" stop-color="#ffb35c" />
       <stop offset="100%" stop-color="#8b6cff" />
     </linearGradient>
   </defs>
 
-  <!-- bubble body + tail: the coach's turn -->
-  <path
-    d="M46 20h68a30 30 0 0 1 30 30v36a30 30 0 0 1-30 30H74l-27 26a3.5 3.5 0 0 1-5.9-2.5V116h-3A30 30 0 0 1 16 86V50a30 30 0 0 1 30-30Z"
-    fill="#15101f" stroke="url(#rim)" stroke-width="7" stroke-linejoin="round" />
+  <rect width="160" height="160" rx="32" fill="#15101f" />
+
+  <!-- speech bubble: a ring that deviates into a pointed tail at 7 o'clock -->
+  <path d="M35.6 108.9A53 53 0 1 1 58.4 128.4L34.5 132.5Z"
+        stroke="url(#ring)" stroke-width="9" stroke-linejoin="round" />
 
   <!-- waveform: your turn -->
-  <g fill="url(#wave)">
-    <rect x="39" y="56" width="10" height="24" rx="5" />
-    <rect x="57" y="45" width="10" height="46" rx="5" />
-    <rect x="75" y="36" width="10" height="64" rx="5" />
-    <rect x="93" y="47" width="10" height="42" rx="5" />
-    <rect x="111" y="55" width="10" height="26" rx="5" />
+  <g fill="url(#bar)">
+    <rect x="50.7" y="66.9" width="7.5" height="24.2" rx="3.75" />
+    <rect x="63.5" y="56.8" width="7.5" height="44.5" rx="3.75" />
+    <rect x="76.3" y="43.9" width="7.5" height="70.3" rx="3.75" />
+    <rect x="89.1" y="56.8" width="7.5" height="44.5" rx="3.75" />
+    <rect x="101.9" y="66.9" width="7.5" height="24.2" rx="3.75" />
   </g>
 </svg>
