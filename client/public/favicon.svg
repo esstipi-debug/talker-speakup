@@ -16,7 +16,7 @@
   <!-- Deliberately overweight vs docs/brand/mark.svg: 3 bars instead of 5, a
        heavier ring and only ~5% margin. A tab icon is 16 device pixels total,
        so legibility beats elegance. Keep in sync with FAVICON in
-       docs/brand/generate-icons.py, which rasterizes this to favicon.ico. -->
+       docs/brand/generate.py, which rasterizes this to favicon.ico. -->
   <path d="M11.648 41.75A23.5 23.5 0 1 1 22.818 51.632L7.627 57.069Z"
         stroke="url(#ring)" stroke-width="7" stroke-linejoin="round" />
 

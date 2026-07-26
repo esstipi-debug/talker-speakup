@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """
-Rasterizes the SpeakUp brand mark into the binary icon formats browsers need.
+Renders every binary brand asset SpeakUp needs from one set of geometry.
 
 The SVGs in this folder (and client/public/favicon.svg) are the source of truth
 for the *design*; this script re-draws the same geometry with Pillow because
-Safari and older browsers can't consume an SVG favicon. Keep the numbers here in
-sync with the SVGs if the mark ever changes, then re-run:
+Safari can't consume an SVG favicon and GitHub's social preview needs a PNG.
+Keep the numbers here in sync with the SVGs if the mark ever changes, then:
 
-    python docs/brand/generate-icons.py
+    python docs/brand/generate.py
 
 Outputs (all committed):
     client/public/favicon.ico          16 / 32 / 48 px, simplified 3-bar mark
     client/public/apple-touch-icon.png 180 px, full 5-bar mark
+    docs/brand/social-card.png         1280x640, GitHub / OG link preview
 
 No SVG rasterizer (ImageMagick / Inkscape / cairosvg) is required.
 """
@@ -19,9 +20,11 @@ No SVG rasterizer (ImageMagick / Inkscape / cairosvg) is required.
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
-OUT_DIR = Path(__file__).resolve().parents[2] / "client" / "public"
+ROOT = Path(__file__).resolve().parents[2]
+OUT_DIR = ROOT / "client" / "public"
+BRAND_DIR = Path(__file__).resolve().parent
 
 # Palette — mirrors client/src/index.css design tokens.
 TILE = (21, 16, 31, 255)  # --color-ink-2  #15101f
@@ -30,6 +33,10 @@ RING_STOPS = [(0.00, (0x8B, 0x6C, 0xFF)),  # --color-coach
               (1.00, (0x2E, 0xE6, 0xA6))]  # --color-accent
 BAR_STOPS = [(0.00, (0xFF, 0xB3, 0x5C)),   # --color-user
              (1.00, (0x8B, 0x6C, 0xFF))]
+INK = (0x0E, 0x0B, 0x16)   # --color-ink
+TEXT = (0xF3, 0xEE, 0xFE)  # --color-text
+MUTED = (0xA3, 0x94, 0xC4)  # --color-muted
+LINE = (0x39, 0x2C, 0x57)  # --color-line
 
 SS = 8  # supersample factor — drawn big, then LANCZOS-downscaled for antialiasing
 
@@ -89,17 +96,22 @@ def _linear_gradient(size, p0, p1, stops):
     return Image.fromarray(_ramp(stops, t).round().astype(np.uint8))
 
 
-def render(spec, px):
-    """Draw one mark at `px` pixels square, supersampled then downscaled."""
+def render(spec, px, tile=True):
+    """Draw one mark at `px` pixels square, supersampled then downscaled.
+
+    tile=False drops the dark rounded square, leaving a transparent mark to
+    compose onto an existing background (the social card does this).
+    """
     n = px * SS
     k = n / spec["units"]                      # user units -> supersampled pixels
     def s(v):                                  # scale helper
         return v * k
 
     img = Image.new("RGBA", (n, n), (0, 0, 0, 0))
-    ImageDraw.Draw(img).rounded_rectangle(
-        [0, 0, n - 1, n - 1], radius=s(spec["tile_radius"]), fill=TILE
-    )
+    if tile:
+        ImageDraw.Draw(img).rounded_rectangle(
+            [0, 0, n - 1, n - 1], radius=s(spec["tile_radius"]), fill=TILE
+        )
 
     # Ring + tail, drawn into a mask so a gradient can be poured through it.
     mask = Image.new("L", (n, n), 0)
@@ -132,6 +144,103 @@ def render(spec, px):
     return img.resize((px, px), Image.LANCZOS)
 
 
+# --- social card -----------------------------------------------------------
+
+CARD = (1280, 640)  # GitHub's recommended social preview size
+FONT_DIR = Path("C:/Windows/Fonts")
+FONTS = {  # first match wins; Inter is the app's face, Segoe UI is the fallback
+    "bold": ["Inter-Bold.ttf", "segoeuib.ttf", "arialbd.ttf"],
+    "semibold": ["Inter-SemiBold.ttf", "seguisb.ttf", "segoeuib.ttf"],
+    "regular": ["Inter-Regular.ttf", "segoeui.ttf", "arial.ttf"],
+}
+
+
+def _font(weight, size):
+    for name in FONTS[weight]:
+        path = FONT_DIR / name
+        if path.exists():
+            return ImageFont.truetype(str(path), size)
+    return ImageFont.load_default(size)
+
+
+def _radial(w, h, cx, cy, rx, ry, rgb, peak, edge=0.6):
+    """One CSS-style radial-gradient layer as an RGBA overlay.
+
+    Mirrors the two glows on `body` in client/src/index.css so the card and the
+    running app share a background, rather than merely a palette.
+    """
+    ys, xs = np.mgrid[0:h, 0:w]
+    d = np.sqrt(((xs - cx) / rx) ** 2 + ((ys - cy) / ry) ** 2)
+    t = np.clip(1 - d / edge, 0, 1)
+    a = peak * t * t * (3 - 2 * t)             # smoothstep falloff
+    layer = np.zeros((h, w, 4), dtype=np.uint8)
+    layer[..., 0], layer[..., 1], layer[..., 2] = rgb
+    layer[..., 3] = (a * 255).round().astype(np.uint8)
+    return Image.fromarray(layer, "RGBA")
+
+
+def social_card():
+    w, h = CARD
+    card = Image.new("RGBA", (w, h), INK + (255,))
+    card.alpha_composite(_radial(w, h, 0.78 * w, -0.08 * h, 860, 700,
+                                 (0x8B, 0x6C, 0xFF), 0.30))
+    card.alpha_composite(_radial(w, h, 0.08 * w, 1.08 * h, 700, 600,
+                                 (0x2E, 0xE6, 0xA6), 0.16))
+    d = ImageDraw.Draw(card)
+
+    # Right side: a waveform bleeding off the edge — the same amber->violet ramp
+    # as the mark's bars, at low opacity so it reads as atmosphere, not content.
+    wave = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    wd = ImageDraw.Draw(wave)
+    env = [0.24, 0.44, 0.31, 0.66, 0.88, 0.54, 0.74, 1.00, 0.66, 0.42,
+           0.81, 0.50, 0.92, 0.60, 0.34, 0.57, 0.26, 0.47, 0.21]
+    bw, gap, mid, x0 = 18, 26, h / 2, 782
+    x = x0
+    for e in env:
+        bh = 48 + e * 320
+        wd.rounded_rectangle([x, mid - bh / 2, x + bw, mid + bh / 2],
+                             radius=bw / 2, fill=(255, 255, 255, 255))
+        x += bw + gap
+    ramp = _linear_gradient_rect(w, h, (x0, 0), (w, 0), RING_STOPS)
+    tinted = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    tinted.paste(ramp, (0, 0), wave.getchannel("A").point(lambda v: int(v * 0.78)))
+    card.alpha_composite(tinted)
+
+    # Left column: mark + wordmark on one baseline, then tagline, then chips.
+    pad = 84
+    mark_px, lock_y = 126, 186
+    card.alpha_composite(render(MARK, mark_px, tile=False), (pad - 8, lock_y - mark_px // 2))
+    d.text((pad + mark_px + 18, lock_y + 4), "SpeakUp",
+           font=_font("bold", 88), fill=TEXT, anchor="lm")
+
+    tag = _font("regular", 34)
+    d.text((pad, 300), "An English speaking coach", font=tag, fill=MUTED)
+    d.text((pad, 344), "that lives on localhost.", font=tag, fill=MUTED)
+
+    chips = [("local-first", (0x2E, 0xE6, 0xA6)),
+             ("voice in, voice out", (0x8B, 0x6C, 0xFF)),
+             ("$0 to start", (0xFF, 0xB3, 0x5C))]
+    cf = _font("semibold", 22)
+    x, top, hgt = pad, 452, 50
+    for label, dot in chips:
+        cw = d.textlength(label, font=cf) + 62
+        d.rounded_rectangle([x, top, x + cw, top + hgt], radius=hgt / 2,
+                            outline=LINE, width=2)
+        d.ellipse([x + 22, top + 20, x + 32, top + 30], fill=dot)
+        d.text((x + 44, top + hgt / 2 + 1), label, font=cf, fill=MUTED, anchor="lm")
+        x += cw + 16
+
+    return card.convert("RGB")
+
+
+def _linear_gradient_rect(w, h, p0, p1, stops):
+    """Like _linear_gradient but for a non-square canvas."""
+    ys, xs = np.mgrid[0:h, 0:w]
+    dx, dy = p1[0] - p0[0], p1[1] - p0[1]
+    t = np.clip(((xs - p0[0]) * dx + (ys - p0[1]) * dy) / (dx * dx + dy * dy), 0.0, 1.0)
+    return Image.fromarray(_ramp(stops, t).round().astype(np.uint8)).convert("RGBA")
+
+
 def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -145,6 +254,11 @@ def main():
     touch = render(MARK, 180)
     touch.save(OUT_DIR / "apple-touch-icon.png", format="PNG", optimize=True)
     print(f"wrote {OUT_DIR / 'apple-touch-icon.png'}  (180x180)")
+
+    card_path = BRAND_DIR / "social-card.png"
+    social_card().save(card_path, format="PNG", optimize=True)
+    kb = card_path.stat().st_size / 1024
+    print(f"wrote {card_path}  ({CARD[0]}x{CARD[1]}, {kb:.0f} kB)")
 
 
 if __name__ == "__main__":
