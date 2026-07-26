@@ -26,6 +26,9 @@ npm-debug.log*
 .DS_Store
 Thumbs.db
 
+# brainstorming visual companion (mockups, session state)
+.superpowers/
+
 # test / verification artifacts
 .playwright-mcp/
 speakup-m1-*.png
