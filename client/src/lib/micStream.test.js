@@ -101,4 +101,66 @@ describe("micStream", () => {
     const { micNowMs } = await import("./micStream.js");
     expect(micNowMs()).toBe(0);
   });
+
+  it("opens capture once when two callers race before the first resolves", async () => {
+    const { getMicStream } = await import("./micStream.js");
+    await Promise.all([getMicStream(), getMicStream()]);
+    expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores worklet messages that are not frames", async () => {
+    const { getMicStream, getFrames } = await import("./micStream.js");
+    await getMicStream();
+    workletNode.port.onmessage({ data: { type: "ring", pcm: new Float32Array(4) } });
+    expect(getFrames()).toHaveLength(0);
+  });
+
+  it("reports elapsed worklet time while the mic is open", async () => {
+    const { getMicStream, micNowMs } = await import("./micStream.js");
+    await getMicStream();
+    expect(micNowMs()).toBe(0); // the stub's currentTime starts at 0
+  });
+
+  it("falls back to a default hop duration before the mic is opened", async () => {
+    const { getHopMs, getCaptureSettings } = await import("./micStream.js");
+    expect(getHopMs()).toBeCloseTo((128 / 48000) * 1000, 5);
+    expect(getCaptureSettings()).toBeNull();
+  });
+
+  it("still releases when disconnecting the node throws", async () => {
+    const { getMicStream, releaseMicStream, isMicOpen } = await import("./micStream.js");
+    await getMicStream();
+    workletNode.disconnect = () => { throw new Error("already torn down"); };
+    expect(() => releaseMicStream()).not.toThrow();
+    expect(stopCalls).toBe(1);
+    expect(isMicOpen()).toBe(false);
+  });
+
+  it("stops the track when the worklet module fails to load", async () => {
+    const { getMicStream, isMicOpen } = await import("./micStream.js");
+    // Break addModule AFTER getUserMedia has already handed us a live track.
+    const BrokenCtx = class {
+      constructor() {
+        this.sampleRate = 48000;
+        this.currentTime = 0;
+        this.audioWorklet = { addModule: async () => { throw new Error("worklet 404"); } };
+      }
+      createMediaStreamSource() { return { connect: () => {} }; }
+      close() { return Promise.resolve(); }
+    };
+    vi.stubGlobal("AudioContext", BrokenCtx);
+
+    await expect(getMicStream()).rejects.toThrow("worklet 404");
+    expect(stopCalls).toBe(1); // the live track was stopped, not abandoned
+    expect(isMicOpen()).toBe(false);
+  });
+
+  it("honours a release requested while acquisition is still in flight", async () => {
+    const { getMicStream, releaseMicStream, isMicOpen } = await import("./micStream.js");
+    const acquiring = getMicStream();
+    releaseMicStream(); // tab hidden mid-acquisition
+    await acquiring;
+    expect(isMicOpen()).toBe(false);
+    expect(stopCalls).toBe(1); // and the mic is genuinely off, not just forgotten
+  });
 });

@@ -5,7 +5,8 @@
  * this, and tests mock this. A plain module singleton with no refcount and no
  * idle-grace timer: one owner, one release path. A leaked reference would
  * leave the microphone hot in the one project whose headline claim is that
- * audio stays on the machine.
+ * audio stays on the machine — so every failure path below tears down whatever
+ * it already acquired rather than abandoning it.
  */
 
 const HOP_SIZE = 128;
@@ -24,10 +25,33 @@ const CONSTRAINTS = {
 
 let current = null;
 let opening = null;
+let releaseRequested = false;
 let frames = [];
 
 export function isMicOpen() {
   return current !== null;
+}
+
+function closeQuietly(ctx) {
+  try {
+    const closing = ctx?.close?.();
+    // close() returns a promise; an unhandled rejection here would surface as
+    // a global error for something we do not care about.
+    if (closing && typeof closing.catch === "function") closing.catch(() => {});
+  } catch {
+    /* already closed */
+  }
+}
+
+/** Stop everything we hold, in any partial combination. Never throws. */
+function teardown(stream, ctx, node) {
+  try {
+    node?.disconnect();
+  } catch {
+    /* already disconnected */
+  }
+  stream?.getAudioTracks?.().forEach((track) => track.stop());
+  closeQuietly(ctx);
 }
 
 export async function getMicStream() {
@@ -35,39 +59,54 @@ export async function getMicStream() {
   if (opening) return opening;
 
   opening = (async () => {
-    const stream = await navigator.mediaDevices.getUserMedia(CONSTRAINTS);
-    const track = stream.getAudioTracks()[0];
-    const ctx = new AudioContext();
-    await ctx.audioWorklet.addModule(new URL("./prosody/pcm.worklet.js", import.meta.url));
+    let stream = null;
+    let ctx = null;
+    let node = null;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia(CONSTRAINTS);
+      ctx = new AudioContext();
+      await ctx.audioWorklet.addModule(new URL("./prosody/pcm.worklet.js", import.meta.url));
 
-    const node = new AudioWorkletNode(ctx, "pcm-processor", {
-      // HOP_SIZE is deliberately not passed: the worklet's hop is whatever
-      // quantum the browser hands it. This module keeps the number only to
-      // convert a frame index back into milliseconds.
-      processorOptions: { batchHops: BATCH_HOPS, ringSeconds: RING_SECONDS },
-    });
-    node.port.onmessage = (e) => {
-      if (e.data?.type === "frames") {
-        for (let i = 0; i < e.data.rmsDb.length; i += 1) frames.push(e.data.rmsDb[i]);
+      node = new AudioWorkletNode(ctx, "pcm-processor", {
+        // HOP_SIZE is deliberately not passed: the worklet's hop is whatever
+        // quantum the browser hands it. This module keeps the number only to
+        // convert a frame index back into milliseconds.
+        processorOptions: { batchHops: BATCH_HOPS, ringSeconds: RING_SECONDS },
+      });
+      node.port.onmessage = (e) => {
+        if (e.data?.type === "frames") {
+          for (let i = 0; i < e.data.rmsDb.length; i += 1) frames.push(e.data.rmsDb[i]);
+        }
+      };
+      ctx.createMediaStreamSource(stream).connect(node);
+
+      // A release asked for while we were still opening wins — publishing the
+      // stream now would leave the mic hot with nobody expecting it.
+      if (releaseRequested) {
+        teardown(stream, ctx, node);
+        return;
       }
-    };
-    ctx.createMediaStreamSource(stream).connect(node);
 
-    current = { stream, track, ctx, node, settings: track.getSettings() };
+      current = { stream, ctx, node, settings: stream.getAudioTracks()[0].getSettings() };
+    } catch (err) {
+      teardown(stream, ctx, node);
+      throw err;
+    }
   })();
 
   try {
     await opening;
   } finally {
     opening = null;
+    releaseRequested = false;
   }
 }
 
 export function releaseMicStream() {
+  // Honoured by the acquisition itself once it lands.
+  if (opening) releaseRequested = true;
   if (!current) return;
-  try { current.node.disconnect(); } catch { /* already torn down */ }
-  current.track.stop();
-  current.ctx.close?.();
+  teardown(current.stream, current.ctx, current.node);
   current = null;
   frames = [];
 }
