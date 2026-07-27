@@ -7,10 +7,10 @@
 **An English speaking coach that lives on `localhost`.**
 You talk. It listens, answers out loud, and — milestone by milestone — starts remembering exactly how you get it wrong.
 
-![status](https://img.shields.io/badge/status-M1%20shipped-8b6cff?style=flat-square)
+![status](https://img.shields.io/badge/status-M3%20shipped%20·%20M7%20in%20progress-8b6cff?style=flat-square)
 ![local first](https://img.shields.io/badge/local--first-no%20account%2C%20no%20cloud-2ee6a6?style=flat-square)
 ![stack](https://img.shields.io/badge/React%2019%20·%20Express%205%20·%20Prisma-15101f?style=flat-square)
-![tests](https://img.shields.io/badge/client%20tests-93%20passing-ffb35c?style=flat-square)
+![tests](https://img.shields.io/badge/tests-180%20passing-ffb35c?style=flat-square)
 
 </div>
 
@@ -134,11 +134,16 @@ you *acquired* get resurfaced too, not only errors you made.
 | **M1** | Bare voice loop — speak, get an answer out loud, XP counter | ✅ shipped |
 | **M1.5** | **Voice I/O hardening** — `useConversation` state machine, live interim transcript, review/edit before send, barge-in, status + error banners, 93 tests, axe-clean | ✅ shipped `2026-07-24` |
 | **M2** | Structured feedback — Harper + LLM, `corrections` + `upgrades`, fluency/confidence meters, CEFR rubric recalibrated to **C1–C2** | ⏭️ next |
-| **M3** | Persistence — the schema stops being decorative and starts getting written to | planned |
+| **M3** | Persistence — the schema stops being decorative and starts getting written to | ✅ shipped `2026-07-27` |
 | **M4** | Error ledger + vocab spaced repetition | planned |
 | **M5** | Custom scenarios — job interview, standup, doctor's visit, arguing with a landlord | planned |
 | **M6** | Fully offline — local Whisper STT (the `/turn/audio` path already exists, dormant) | planned |
-| **M7** | Pronunciation (CAPT) — phoneme-level scoring via wav2vec2/GOP, because STT *erases* the thing being graded | planned |
+| **M7** | **Accent & prosody** — teaches rhythm, then measures it. Forced alignment (MFA) rather than wav2vec2/GOP, whose best published F1 for open-vocabulary phone-level error detection is 61–63% — a coin flip with authority | 🚧 slices 1–3 |
+
+**What M7 has actually shipped:** a silent-pause profile computed entirely in the browser (an import-free `AudioWorklet`, an adaptive floor, clause-boundary vs mid-phrase placement anchored on the recognizer's own endpoint decisions), a persistence spine, and a pronunciation provider factory with `none` as a first-class state. The Pronunciation Gym, the echo moment and the scoring sidecar are slices 4–8, gated on two spikes that have not run yet.
+
+Design: [`docs/superpowers/specs/2026-07-26-accent-prosody-layer-design.md`](docs/superpowers/specs/2026-07-26-accent-prosody-layer-design.md).
+It is candid about what this cannot do — see its §3.2 (*what it identifies and what it does not*) and §16 (*what can honestly be claimed*).
 
 Known human-verification debt is tracked in
 [`docs/superpowers/plans/voice-io-verification-checklist.md`](docs/superpowers/plans/voice-io-verification-checklist.md).
@@ -156,34 +161,52 @@ speakup/
 │   └── src/
 │       ├── hooks/useConversation.js   ← the state machine (the brain of the UI)
 │       ├── lib/speech.js              ← Web Speech STT + SpeechSynthesis wrapper
-│       └── components/                ← MicButton, TranscriptReview, VoiceStatus…
+│       ├── lib/micStream.js           ← the ONLY file that touches getUserMedia or Web Audio
+│       ├── lib/prosody/               ← pcm.worklet.js (import-free) + pure pause analysis
+│       └── components/                ← MicButton, TranscriptReview, VoiceStatus, PauseNote…
 └── server/               Express 5
+    ├── prisma/           SQLite, and no longer decorative
     └── src/
+        ├── app.js        builds the app · index.js only listens, so tests can import it
+        ├── db.js         the lazy PrismaClient singleton
+        ├── repo/         the only module that reads or writes Session / Turn
         ├── brain/        mock | mistral      → evaluateTurn(ctx)
         ├── tts/          kokoro | voicebox | browser
         ├── stt/          voicebox | none     (server-side path, dormant until M6)
+        ├── pronunciation/ local | mock | none  (sidecar arrives in slice 3)
         └── prompts/      the coach's personality lives here — not in the weights
 ```
+
+Two boundaries are load-bearing rather than stylistic. `micStream.js` is the only file allowed to
+touch Web Audio — which is what keeps `useConversation` testable, since jsdom has none. And `repo/` is
+the only module that talks to Prisma, which is where the JSON encode/decode lives so no caller ever
+sees a string where it expects an object.
 
 | Slot | Options | Default | Notes |
 |---|---|---|---|
 | **brain** | `mock`, `mistral` | auto | No key → `mock`, offline and free. Key present → Mistral. |
 | **tts** | `kokoro`, `voicebox`, `browser` | `kokoro` | If TTS dies mid-turn the server still returns the turn and the client falls back to the browser voice. The loop never breaks because a container is down. |
 | **stt** | `voicebox`, unset | unset | Unset = browser Web Speech. Set = server transcribes (`POST /turn/audio`). |
+| **pron** | `local`, `mock`, `none` | `none` | `none` is a supported state, not an error — no scorer means an unscored card, nothing throws. There is deliberately **no health probe**: reachability is whatever the score call returns, so starting the sidecar mid-session just works on the next attempt. |
 
 > On models: the coach's pedagogy lives in `server/src/prompts/coach-system.js`, **not** in fine-tuned
 > weights. The HuggingFace "english teacher" fine-tunes are hobbyist checkpoints with empty model cards
 > and no eval metrics — every one of them is weaker than a good prompt on a decent general model. The
-> real model-shaped gaps are narrow and specific: phoneme scoring (M7), CEFR classification (M2),
-> grammatical error correction (M2).
+> real model-shaped gaps are narrow and specific: forced alignment (M7), CEFR classification (M2),
+> grammatical error correction (M2). Note that M7 deliberately does **not** do open-vocabulary phoneme
+> scoring — see the design spec's §3.2 for why a 61–63% F1 detector is worse than no detector.
 
 ### Endpoints
 
 | | |
 |---|---|
-| `GET /health` | `{ status, brain, tts, stt, ts }` — the UI renders these as live pills |
-| `POST /turn` | `{ utterance, history }` → `{ coach_reply, xp, audio?, audioFormat?, ttsProvider }` |
+| `GET /health` | `{ status, brain, tts, stt, pron, ts }` — the UI renders these as live pills |
+| `POST /turn` | `{ utterance, history, sessionId?, prosody?, captureSettings? }` → `{ coach_reply, xp, audio?, audioFormat?, ttsProvider, sessionId }` |
 | `POST /turn/audio` | multipart `{ audio, history? }` → adds `transcript`. Returns `501` unless `STT_PROVIDER` is set |
+
+`sessionId` comes back `null` when the server could not write to the one it was given — that is the
+signal to start a fresh session, not to retry a dead one. Persistence failing costs a row, never the
+turn: the same rule the TTS path has always followed.
 
 ---
 
@@ -218,12 +241,13 @@ docker run -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-cpu
 
 ## Tests
 
-93 client tests (Vitest + Testing Library + jsdom), ~99% coverage on the two files where the bodies are
-buried — `useConversation.js` and `speech.js` — plus `jest-axe` accessibility assertions on the
-components.
+**180 tests** — 157 on the client (Vitest + Testing Library + jsdom) and 23 on the server (Vitest, node
+environment, binding port 0 so they never collide with a running dev server). Coverage is gated at 80%
+on four metrics for the files where the bodies are buried: `useConversation.js`, `speech.js`,
+`micStream.js` and `lib/prosody/**`. Plus `jest-axe` assertions on the components.
 
 ```bash
-npm --prefix client test
+npm test                              # both suites
 npm --prefix client run test:coverage
 ```
 
@@ -231,6 +255,13 @@ Voice code is *unusually* worth testing, because the failure modes are all timin
 self-terminates on silence unless `continuous=true`, restarts race against user-initiated stops, and
 `InvalidStateError` shows up only on the restart path. Those are exactly the bugs you can't reproduce on
 demand — so they're pinned by tests instead.
+
+The prosody work added a second category: **arithmetic with no reference implementation to check
+against**. The pause detector and the syllable-nuclei logic are ported from published prose rather than
+from the authors' scripts, which are GPL — so there are no golden values to compare to. They're tested
+with constructed signals whose answers are known in closed form: a tone, exactly 400 ms of silence,
+another tone, and the assertion that exactly one pause of 380–420 ms comes out. Nothing in the fixture
+directory, nothing to drift.
 
 ### Pre-push hook
 
