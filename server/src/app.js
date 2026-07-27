@@ -4,6 +4,7 @@ import turnRouter from "./routes/turn.js";
 import { currentProvider } from "./brain/index.js";
 import { currentTTSProvider } from "./tts/index.js";
 import { currentSTTProvider } from "./stt/index.js";
+import { currentPronProvider } from "./pronunciation/index.js";
 
 /**
  * Builds the Express app but never listens — so tests can import it and bind
@@ -20,6 +21,7 @@ app.get("/health", (_req, res) => {
     brain: currentProvider(),
     tts: currentTTSProvider(),
     stt: currentSTTProvider(),
+    pron: currentPronProvider(),
     ts: Date.now(),
   });
 });

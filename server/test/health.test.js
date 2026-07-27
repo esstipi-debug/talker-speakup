@@ -25,6 +25,7 @@ describe("GET /health", () => {
     expect(body).toHaveProperty("brain");
     expect(body).toHaveProperty("tts");
     expect(body).toHaveProperty("stt");
+    expect(body).toHaveProperty("pron");
   });
 });
 
