@@ -61,6 +61,13 @@ describe("accessibility", () => {
     expect(await axe(container)).toHaveNoViolations();
   });
 
+  it("VoiceStatus has no axe violations (with a pause note)", async () => {
+    const { container } = render(
+      <VoiceStatus {...vs} pauseNote="You broke mid-phrase 4 times — let the breath land on the comma instead." />,
+    );
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
   it("PauseNote has no axe violations", async () => {
     const { container } = render(
       <PauseNote note="You broke mid-phrase 4 times — let the breath land on the comma instead." />,

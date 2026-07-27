@@ -50,4 +50,19 @@ describe("VoiceStatus", () => {
     await userEvent.click(screen.getByRole("button", { name: /dismiss error/i }));
     expect(onDismissError).toHaveBeenCalledTimes(1);
   });
+
+  it("includes the pause note sentence inside the single polite live region", () => {
+    const note = "You broke mid-phrase 3 times — let the breath land on the comma instead.";
+    const { container } = render(<VoiceStatus {...base} pauseNote={note} />);
+    const liveRegion = container.querySelector('[aria-live="polite"]');
+    expect(liveRegion).toHaveTextContent(/broke mid-phrase 3 times/);
+    // Still exactly one live region — the note must not add a second one.
+    expect(container.querySelectorAll("[aria-live]")).toHaveLength(1);
+  });
+
+  it("renders nothing extra in the live region when there is no pause note", () => {
+    const { container } = render(<VoiceStatus {...base} pauseNote={null} />);
+    const liveRegion = container.querySelector('[aria-live="polite"]');
+    expect(liveRegion).toHaveTextContent("");
+  });
 });

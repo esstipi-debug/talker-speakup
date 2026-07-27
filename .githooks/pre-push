@@ -1,0 +1,9 @@
+#!/bin/sh
+# Spec §12: with CI deliberately absent, this hook is the only automatic
+# enforcement of the test suite (and the 80% coverage gate it protects) before
+# code leaves this machine. Enabled once per clone via:
+#   git config core.hooksPath .githooks
+
+set -e
+echo "[pre-push] running the full test suite before allowing the push..."
+npm test

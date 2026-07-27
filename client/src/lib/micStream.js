@@ -28,6 +28,11 @@ let opening = null;
 let releaseRequested = false;
 let frames = [];
 let framesEpochMs = 0;
+// The mic stays open across turns (spec §4.1: no refcount, no idle-grace
+// timer), but frames must only accumulate during an active measurement
+// window — otherwise the ring grows without bound between turns and during
+// idle. resetFrames() opens the window; stopFrames() closes it.
+let collecting = false;
 
 export function isMicOpen() {
   return current !== null;
@@ -75,7 +80,7 @@ export async function getMicStream() {
         processorOptions: { batchHops: BATCH_HOPS, ringSeconds: RING_SECONDS },
       });
       node.port.onmessage = (e) => {
-        if (e.data?.type === "frames") {
+        if (collecting && e.data?.type === "frames") {
           for (let i = 0; i < e.data.rmsDb.length; i += 1) frames.push(e.data.rmsDb[i]);
         }
       };
@@ -131,6 +136,12 @@ export function micNowMs() {
 export function resetFrames() {
   frames = [];
   framesEpochMs = current ? current.ctx.currentTime * 1000 : 0;
+  collecting = true;
+}
+
+/** Ends the measurement window: further worklet batches are dropped, not buffered. */
+export function stopFrames() {
+  collecting = false;
 }
 
 export function getFrames() {

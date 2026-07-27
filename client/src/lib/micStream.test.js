@@ -62,20 +62,51 @@ describe("micStream", () => {
     expect(addModuleCalls).toBe(1);
   });
 
-  it("accumulates frames posted by the worklet", async () => {
-    const { getMicStream, getFrames } = await import("./micStream.js");
+  it("accumulates frames posted by the worklet during an active measurement window", async () => {
+    const { getMicStream, getFrames, resetFrames } = await import("./micStream.js");
     await getMicStream();
+    resetFrames(); // opens the collection window
     workletNode.port.onmessage({ data: { type: "frames", rmsDb: Float32Array.from([-10, -20]) } });
     workletNode.port.onmessage({ data: { type: "frames", rmsDb: Float32Array.from([-30]) } });
     expect(Array.from(getFrames())).toEqual([-10, -20, -30]);
   });
 
+  it("drops frames posted before any window has been opened", async () => {
+    // The mic stays open across turns/idle time by design; without an active
+    // window the ring must not grow at all.
+    const { getMicStream, getFrames } = await import("./micStream.js");
+    await getMicStream();
+    workletNode.port.onmessage({ data: { type: "frames", rmsDb: Float32Array.from([-10, -20]) } });
+    expect(getFrames()).toHaveLength(0);
+  });
+
   it("keeps the ring across a reset of nothing — resetFrames only clears frames", async () => {
     const { getMicStream, getFrames, resetFrames } = await import("./micStream.js");
     await getMicStream();
+    resetFrames();
     workletNode.port.onmessage({ data: { type: "frames", rmsDb: Float32Array.from([-10]) } });
     resetFrames();
     expect(getFrames()).toHaveLength(0);
+  });
+
+  it("stops collecting once stopFrames() is called, so a further worklet message is dropped", async () => {
+    const { getMicStream, getFrames, resetFrames, stopFrames } = await import("./micStream.js");
+    await getMicStream();
+    resetFrames();
+    workletNode.port.onmessage({ data: { type: "frames", rmsDb: Float32Array.from([-10]) } });
+    stopFrames();
+    workletNode.port.onmessage({ data: { type: "frames", rmsDb: Float32Array.from([-20]) } });
+    expect(Array.from(getFrames())).toEqual([-10]); // the post-stop batch never lands
+  });
+
+  it("resumes collecting on the next resetFrames() after stopFrames() closed the window", async () => {
+    const { getMicStream, getFrames, resetFrames, stopFrames } = await import("./micStream.js");
+    await getMicStream();
+    resetFrames();
+    stopFrames();
+    resetFrames(); // a new turn opens a new window
+    workletNode.port.onmessage({ data: { type: "frames", rmsDb: Float32Array.from([-15]) } });
+    expect(Array.from(getFrames())).toEqual([-15]);
   });
 
   it("reports the hop duration derived from the real sample rate", async () => {
