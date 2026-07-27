@@ -8,6 +8,7 @@
     "dev": "concurrently -k -n server,client -c magenta,cyan \"npm --prefix server run dev\" \"npm --prefix client run dev\"",
     "dev:server": "npm --prefix server run dev",
     "dev:client": "npm --prefix client run dev",
+    "test": "npm --prefix client test && npm --prefix server test",
     "install:all": "npm install && npm --prefix server install && npm --prefix client install",
     "prisma:migrate": "npm --prefix server run prisma:migrate",
     "prisma:generate": "npm --prefix server run prisma:generate",
