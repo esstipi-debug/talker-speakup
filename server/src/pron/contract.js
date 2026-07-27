@@ -163,3 +163,57 @@ export function clampScore(value) {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.min(100, Math.round(value)));
 }
+
+/**
+ * Validates a POST /pron/assess request body. Order matters: audio presence,
+ * then audio size, then text, then mode — so a 15 MB upload with a blank
+ * sentence is reported as the size problem it actually is.
+ *
+ * @param {{ text?: unknown, mode?: unknown, audioBytes?: unknown }} [input]
+ * @returns {{ ok: true, value: { text: string, mode: "scripted"|"unscripted" } }
+ *          | { ok: false, status: number, code: string, error: string }}
+ */
+export function validateAssessInput({ text, mode, audioBytes } = {}) {
+  if (!Number.isInteger(audioBytes) || audioBytes <= 0) {
+    return {
+      ok: false,
+      status: 400,
+      code: PRON_ERROR_CODES.MISSING_AUDIO,
+      error: 'Missing "audio" file.',
+    };
+  }
+  if (audioBytes > MAX_AUDIO_BYTES) {
+    return {
+      ok: false,
+      status: 413,
+      code: PRON_ERROR_CODES.AUDIO_TOO_LARGE,
+      error: "That recording is too large. Keep drill takes under 15 MB.",
+    };
+  }
+  if (typeof text !== "string" || !text.trim()) {
+    return {
+      ok: false,
+      status: 400,
+      code: PRON_ERROR_CODES.MISSING_TEXT,
+      error: 'Missing "text" (the reference sentence, non-empty string).',
+    };
+  }
+  const trimmed = text.trim();
+  if (trimmed.length > MAX_TEXT_LENGTH) {
+    return {
+      ok: false,
+      status: 400,
+      code: PRON_ERROR_CODES.TEXT_TOO_LONG,
+      error: "That reference sentence is too long. Keep it under 300 characters.",
+    };
+  }
+  if (mode !== undefined && !PRON_MODES.includes(mode)) {
+    return {
+      ok: false,
+      status: 400,
+      code: PRON_ERROR_CODES.INVALID_MODE,
+      error: '"mode" must be "scripted" or "unscripted".',
+    };
+  }
+  return { ok: true, value: { text: trimmed, mode: mode ?? DEFAULT_MODE } };
+}
