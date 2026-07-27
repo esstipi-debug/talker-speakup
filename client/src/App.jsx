@@ -4,6 +4,7 @@ import MessageBubble from "./components/MessageBubble.jsx";
 import MicButton from "./components/MicButton.jsx";
 import TranscriptReview from "./components/TranscriptReview.jsx";
 import VoiceStatus from "./components/VoiceStatus.jsx";
+import PauseNote from "./components/PauseNote.jsx";
 import { useConversation } from "./hooks/useConversation.js";
 
 export default function App() {
@@ -69,6 +70,7 @@ export default function App() {
             onReplay={m.role === "coach" && c.status === "idle" ? () => c.replay(m) : undefined}
           />
         ))}
+        <PauseNote note={c.pauseNote} />
         {c.status === "thinking" && (
           <p className="text-xs text-muted pl-1">coach is composing a reply…</p>
         )}

@@ -4,6 +4,8 @@ import { axe } from "jest-axe";
 import VoiceStatus from "./VoiceStatus.jsx";
 import TranscriptReview from "./TranscriptReview.jsx";
 import MicButton from "./MicButton.jsx";
+import PauseNote from "./PauseNote.jsx";
+import StatHeader from "./StatHeader.jsx";
 
 const vs = {
   status: "idle",
@@ -56,6 +58,20 @@ describe("accessibility", () => {
 
   it("VoiceStatus has no axe violations (ttsFallbackActive)", async () => {
     const { container } = render(<VoiceStatus {...vs} ttsFallbackActive />);
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("PauseNote has no axe violations", async () => {
+    const { container } = render(
+      <PauseNote note="You broke mid-phrase 4 times — let the breath land on the comma instead." />,
+    );
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("StatHeader has no axe violations", async () => {
+    const { container } = render(
+      <StatHeader totalXp={240} turns={5} brain="mistral" tts="kokoro" stt="whisper" />,
+    );
     expect(await axe(container)).toHaveNoViolations();
   });
 });
