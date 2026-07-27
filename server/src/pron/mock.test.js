@@ -128,15 +128,21 @@ describe("mock — MockPron.assess", () => {
     expect(report.words.length).toBeGreaterThan(0);
   });
 
-  it("is deterministic for empty string input", async () => {
+  it("is deterministic for empty string input and emits the blank placeholder", async () => {
     const a = await new MockPron().assess(AUDIO, { text: "" });
     const b = await new MockPron().assess(AUDIO, { text: "" });
     expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+    expect(validateReport(a)).toEqual({ ok: true });
+    expect(a.words[0].word).toBe("(blank)");
+    expect(a.words[0].word.trim()).not.toBe("");
   });
 
-  it("is deterministic for whitespace-only input", async () => {
+  it("is deterministic for whitespace-only input and emits the blank placeholder", async () => {
     const a = await new MockPron().assess(AUDIO, { text: "   " });
     const b = await new MockPron().assess(AUDIO, { text: "   " });
     expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+    expect(validateReport(a)).toEqual({ ok: true });
+    expect(a.words[0].word).toBe("(blank)");
+    expect(a.words[0].word.trim()).not.toBe("");
   });
 });

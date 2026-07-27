@@ -14,6 +14,7 @@ const MAX_PHONES_PER_WORD = 6;
 const PUNCTUATION = /[^\p{L}\p{N}']/gu;
 const MOCK_SAMPLE_RATE = 16000;
 const BYTES_PER_SAMPLE = 2; // the buffer is only measured, never decoded
+const BLANK_WORD = "(blank)"; // placeholder when input is empty or whitespace-only; upstream route should have rejected this
 
 /**
  * FNV-1a, 32-bit, over UTF-16 code units. Exposed so tests can pin the
@@ -41,7 +42,7 @@ function splitWords(text) {
   // "..." strips to nothing; a report with zero words fails validateReport, so
   // keep the raw tokens instead of emitting an invalid report.
   // If both are empty (e.g., empty or whitespace-only input), return a placeholder.
-  return cleaned.length ? cleaned : (raw.length ? raw : [" "]);
+  return cleaned.length ? cleaned : (raw.length ? raw : [BLANK_WORD]);
 }
 
 export class MockPron {
