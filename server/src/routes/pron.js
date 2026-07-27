@@ -3,6 +3,7 @@ import multer from "multer";
 import { getPron, currentPronProvider } from "../pron/index.js";
 import { listPrompts } from "../pron/prompts.js";
 import {
+  AUDIO_TOO_LARGE_MESSAGE,
   MAX_AUDIO_BYTES,
   PRON_ERROR_CODES,
   validateAssessInput,
@@ -22,7 +23,7 @@ function uploadSingleAudio(req, res, next) {
     if (!err) return next();
     if (err.code === "LIMIT_FILE_SIZE") {
       return res.status(413).json({
-        error: "That recording is too large. Keep drill takes under 15 MB.",
+        error: AUDIO_TOO_LARGE_MESSAGE,
         code: PRON_ERROR_CODES.AUDIO_TOO_LARGE,
       });
     }
@@ -36,7 +37,9 @@ function uploadSingleAudio(req, res, next) {
  * resp: { version, mode, pronProvider, model, overall, prosody, words }
  *
  * `mode` is the design §3 switch: scripted shows phonemes, unscripted never
- * does. Stripping happens here, for every provider, so no provider can leak.
+ * does. That guarantee is NOT enforced yet — `stripPhones` (../pron/contract.js)
+ * is not wired into this route. It lands in a later task; until then a
+ * provider that ignores `mode` and returns phones anyway will leak them.
  */
 router.post("/assess", uploadSingleAudio, async (req, res) => {
   const check = validateAssessInput({

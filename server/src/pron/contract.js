@@ -141,6 +141,15 @@ export const MAX_TEXT_LENGTH = 300;
 export const MAX_AUDIO_BYTES = 15 * 1024 * 1024;
 export const REPORT_VERSION = 1;
 
+/**
+ * Shared user-facing message for an oversized upload. `validateAssessInput`
+ * below and the multer `LIMIT_FILE_SIZE` handler in `../routes/pron.js` are
+ * two independent call sites that both need to say the same thing to the
+ * learner; export the string once so it can't drift between them.
+ */
+export const AUDIO_TOO_LARGE_MESSAGE =
+  "That recording is too large. Keep drill takes under 15 MB.";
+
 export const PRON_ERROR_CODES = Object.freeze({
   MISSING_AUDIO: "MISSING_AUDIO",
   MISSING_TEXT: "MISSING_TEXT",
@@ -187,7 +196,7 @@ export function validateAssessInput({ text, mode, audioBytes } = {}) {
       ok: false,
       status: 413,
       code: PRON_ERROR_CODES.AUDIO_TOO_LARGE,
-      error: "That recording is too large. Keep drill takes under 15 MB.",
+      error: AUDIO_TOO_LARGE_MESSAGE,
     };
   }
   if (typeof text !== "string" || !text.trim()) {

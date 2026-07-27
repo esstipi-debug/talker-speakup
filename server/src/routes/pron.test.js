@@ -136,6 +136,49 @@ describe("POST /pron/assess — scripted scoring", () => {
   });
 });
 
+describe("POST /pron/assess — provider failures", () => {
+  it("502s with PRON_UNAVAILABLE when the provider rejects", async () => {
+    assess.mockRejectedValueOnce(new Error("boom"));
+
+    const res = await post(createApp())
+      .field("text", TEXT)
+      .attach("audio", AUDIO, { filename: "drill.webm" });
+
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe("PRON_UNAVAILABLE");
+    expect(res.body.detail).toBe("boom");
+  });
+
+  it("502s with BAD_REPORT when the provider resolves a report that fails validateReport", async () => {
+    // Deliberately malformed: `words` is a required, non-empty array per the
+    // schema in contract.js — omitting it is a genuine validateReport failure,
+    // not a stand-in for one.
+    assess.mockResolvedValueOnce({
+      version: 1,
+      mode: "scripted",
+      model: "mock",
+      overall: { accuracy: 90, fluency: 80, completeness: 100 },
+      prosody: {
+        speechRateWpm: 120,
+        articulationRateSyllPerSec: 4,
+        pauseCount: 0,
+        pauseTotalSec: 0,
+        f0MinHz: null,
+        f0MaxHz: null,
+        f0RangeSemitones: null,
+      },
+    });
+
+    const res = await post(createApp())
+      .field("text", TEXT)
+      .attach("audio", AUDIO, { filename: "drill.webm" });
+
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe("BAD_REPORT");
+    expect(res.body.detail).toBe("report.words must be a non-empty array.");
+  });
+});
+
 describe("POST /pron/assess — input rejections", () => {
   it("400s a request with no audio part", async () => {
     const res = await post(createApp()).field("text", TEXT);
@@ -193,6 +236,19 @@ describe("POST /pron/assess — input rejections", () => {
       error: "That recording is too large. Keep drill takes under 15 MB.",
       code: "AUDIO_TOO_LARGE",
     });
+    expect(assess).not.toHaveBeenCalled();
+  });
+
+  it("falls through to the global 500 handler for a non-size multer error (unexpected field name)", async () => {
+    // multer's `single("audio")` rejects any file part whose fieldname isn't
+    // "audio" with a LIMIT_UNEXPECTED_FILE MulterError. uploadSingleAudio only
+    // special-cases LIMIT_FILE_SIZE, so this exercises its `next(err)` branch
+    // and lands on app.js's generic error handler.
+    const res = await post(createApp())
+      .field("text", TEXT)
+      .attach("notaudio", AUDIO, { filename: "drill.webm" });
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "Internal server error." });
     expect(assess).not.toHaveBeenCalled();
   });
 });
