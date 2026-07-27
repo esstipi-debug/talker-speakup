@@ -2132,15 +2132,21 @@ router.post("/", async (req, res) => {
 });
 
 async function persistTurn({ sessionId, utterance, prosody, result }) {
+  let id = sessionId ?? null;
+  let sessionUsable = false;
   try {
-    let id = sessionId;
     if (!id) id = (await startSession()).id;
     await recordTurn({ sessionId: id, role: "user", text: utterance, prosody: prosody ?? null });
+    sessionUsable = true; // a write to this session has now succeeded
     await recordTurn({ sessionId: id, role: "coach", text: result.coach_reply, xp: result.xp ?? null });
     return id;
   } catch (dbErr) {
     console.warn("[turn] persistence failed, continuing:", dbErr.message);
-    return sessionId ?? null;
+    // Never hand back an id we could not write to. The client re-adopts
+    // whatever comes back, so echoing an unusable id would make every later
+    // turn fail the same way, silently and forever. Returning null makes the
+    // next turn open a fresh session instead.
+    return sessionUsable ? id : null;
   }
 }
 ```
