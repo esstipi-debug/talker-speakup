@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { postTurn, getHealth } from "../lib/api.js";
+import { postTurn, postTurnAudio, getHealth } from "../lib/api.js";
 import {
   createRecognizer,
   isSTTSupported,
@@ -8,6 +8,7 @@ import {
   stopSpeaking,
   warmUpVoices,
 } from "../lib/speech.js";
+import { useSessionRecorder } from "../lib/useSessionRecorder";
 
 const GREETING =
   "Hi! I'm your SpeakUp coach. Tap the mic and tell me about your day — let's practice some English.";
@@ -30,6 +31,11 @@ export function useConversation() {
   const [error, setError] = useState(null);
   const [providers, setProviders] = useState({ brain: null, tts: null, stt: null });
   const [ttsFallbackActive, setTtsFallbackActive] = useState(false);
+
+  // Browser STT is the default capture path. When it's unavailable we fall back
+  // to recording audio and letting the server transcribe (POST /turn/audio).
+  const sttSupported = isSTTSupported();
+  const recorder = useSessionRecorder();
 
   const recognizerRef = useRef(null);
   const userStoppedRef = useRef(false);
@@ -57,6 +63,11 @@ export function useConversation() {
       if (h) setProviders({ brain: h.brain, tts: h.tts, stt: h.stt });
     });
   }, []);
+
+  // Surface mic errors from the audio fallback recorder into the shared error UI.
+  useEffect(() => {
+    if (recorder.error) setError(`Microphone error: ${recorder.error}`);
+  }, [recorder.error]);
 
   // ---------------- playback controller ----------------
   function stopPlayback() {
@@ -116,6 +127,32 @@ export function useConversation() {
     }
   }
 
+  // Audio-capture turn (STT-unsupported fallback): the server transcribes the
+  // recorded clip and returns the transcript alongside the coach reply.
+  async function runAudioTurn(blob) {
+    setError(null);
+    const historyBefore = messagesRef.current;
+    setStatus("thinking");
+    try {
+      const { transcript, coach_reply, xp, audio, audioFormat } = await postTurnAudio({
+        blob,
+        history: historyBefore,
+      });
+      const userText = (transcript || "").trim();
+      const userMsg = { role: "user", text: userText || "🎤 (couldn't transcribe)" };
+      setMessages((prev) => [...prev, userMsg, { role: "coach", text: coach_reply, audio, audioFormat }]);
+      if (typeof xp === "number") setTotalXp((v) => v + xp);
+
+      const expectedServerVoice = providersRef.current.tts && providersRef.current.tts !== "browser";
+      if (!audio && expectedServerVoice) setTtsFallbackActive(true);
+      else if (audio) setTtsFallbackActive(false);
+      playCoach(coach_reply, audio, audioFormat);
+    } catch (err) {
+      setError(err.message || "The coach brain failed to respond.");
+      setStatus("idle");
+    }
+  }
+
   // ---------------- speech capture ----------------
   function finishListening(announceEmpty) {
     const combined = `${draftRef.current} ${interimRef.current}`.trim();
@@ -171,12 +208,29 @@ export function useConversation() {
     }, 0);
   }
 
+  // Fire-and-forget: kept out of startListening so its default (browser-STT)
+  // path stays a plain sync function — callers/tests invoke it via a sync
+  // act(), and wrapping the whole function in async would defer that path's
+  // state updates to a microtask even when no await is ever reached.
+  async function startListeningViaRecorder() {
+    const started = await recorder.start();
+    if (started) setStatus("listening");
+    // On failure, recorder.error is surfaced via the effect above; stay idle.
+  }
+
   function startListening() {
     if (statusRef.current === "listening" || statusRef.current === "thinking") return;
     stopPlayback();
     setError(null);
     setDraft("");
     setInterim("");
+
+    // Fallback: no browser STT → record audio for server-side transcription.
+    if (!sttSupported) {
+      startListeningViaRecorder();
+      return;
+    }
+
     userStoppedRef.current = false;
     fatalRef.current = false;
     emptyRestartsRef.current = 0;
@@ -204,8 +258,27 @@ export function useConversation() {
     }
   }
 
+  // Fire-and-forget for the same reason as startListeningViaRecorder above.
+  async function stopListeningViaRecorder() {
+    setStatus("thinking"); // uploading + server-side transcription
+    const clip = await recorder.stop();
+    if (!clip) {
+      setStatus("idle");
+      setError(NO_SPEECH_MSG);
+      return;
+    }
+    runAudioTurn(clip.blob);
+  }
+
   function stopListening() {
     if (statusRef.current !== "listening") return;
+
+    // Fallback: stop recording and hand the clip to the server for transcription.
+    if (!sttSupported) {
+      stopListeningViaRecorder();
+      return;
+    }
+
     userStoppedRef.current = true;
     try {
       recognizerRef.current?.stop();
@@ -277,7 +350,7 @@ export function useConversation() {
     error,
     providers,
     ttsFallbackActive,
-    sttSupported: isSTTSupported(),
+    sttSupported,
     turns: messages.filter((m) => m.role === "user").length,
     startListening,
     stopListening,
