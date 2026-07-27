@@ -8,10 +8,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 let workletNode;
 let addModuleCalls;
 let stopCalls;
+let stubCurrentTime;
 
 function installWebAudioStubs() {
   addModuleCalls = 0;
   stopCalls = 0;
+  stubCurrentTime = 0;
   const track = {
     stop: () => { stopCalls += 1; },
     getSettings: () => ({ sampleRate: 48000, echoCancellation: false, autoGainControl: false }),
@@ -24,7 +26,11 @@ function installWebAudioStubs() {
     disconnect() {}
   });
   vi.stubGlobal("AudioContext", class {
-    constructor() { this.sampleRate = 48000; this.currentTime = 0; this.audioWorklet = { addModule: async () => { addModuleCalls += 1; } }; }
+    constructor() {
+      this.sampleRate = 48000;
+      Object.defineProperty(this, "currentTime", { get: () => stubCurrentTime });
+      this.audioWorklet = { addModule: async () => { addModuleCalls += 1; } };
+    }
     createMediaStreamSource() { return { connect: () => {} }; }
     close() { return Promise.resolve(); }
   });
@@ -142,7 +148,7 @@ describe("micStream", () => {
     const BrokenCtx = class {
       constructor() {
         this.sampleRate = 48000;
-        this.currentTime = 0;
+        Object.defineProperty(this, "currentTime", { get: () => stubCurrentTime });
         this.audioWorklet = { addModule: async () => { throw new Error("worklet 404"); } };
       }
       createMediaStreamSource() { return { connect: () => {} }; }
@@ -162,5 +168,19 @@ describe("micStream", () => {
     await acquiring;
     expect(isMicOpen()).toBe(false);
     expect(stopCalls).toBe(1); // and the mic is genuinely off, not just forgotten
+  });
+
+  it("re-bases its clock on resetFrames, so frame indices and timestamps share an origin", async () => {
+    const { getMicStream, micNowMs, resetFrames } = await import("./micStream.js");
+    await getMicStream();
+
+    stubCurrentTime = 300; // five minutes into the session
+    expect(micNowMs()).toBe(300_000);
+
+    resetFrames(); // a new turn: the frame buffer restarts at index 0...
+    expect(micNowMs()).toBe(0); // ...and so does the clock the caller sees
+
+    stubCurrentTime = 302;
+    expect(micNowMs()).toBe(2000); // two seconds into THIS turn, not the session
   });
 });

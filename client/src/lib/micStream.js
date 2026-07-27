@@ -27,6 +27,7 @@ let current = null;
 let opening = null;
 let releaseRequested = false;
 let frames = [];
+let framesEpochMs = 0;
 
 export function isMicOpen() {
   return current !== null;
@@ -109,15 +110,27 @@ export function releaseMicStream() {
   teardown(current.stream, current.ctx, current.node);
   current = null;
   frames = [];
+  framesEpochMs = 0;
 }
 
-/** Worklet-clock milliseconds. Monotonic, and aligned with the frame indices. */
+/**
+ * Milliseconds since the current frame buffer began — NOT since the
+ * AudioContext was created. Monotonic within a measurement window, and
+ * directly comparable with the frame indices `getFrames()` returns.
+ */
 export function micNowMs() {
-  return current ? current.ctx.currentTime * 1000 : 0;
+  return current ? current.ctx.currentTime * 1000 - framesEpochMs : 0;
 }
 
+/**
+ * Start a new measurement window: empty the frame buffer AND re-base the clock
+ * so `micNowMs()` counts from this instant. Frame indices and timestamps must
+ * share an origin — they are compared directly downstream — and this module is
+ * the only place that owns both, so it is the only place that can guarantee it.
+ */
 export function resetFrames() {
   frames = [];
+  framesEpochMs = current ? current.ctx.currentTime * 1000 : 0;
 }
 
 export function getFrames() {
