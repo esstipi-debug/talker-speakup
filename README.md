@@ -232,6 +232,16 @@ self-terminates on silence unless `continuous=true`, restarts race against user-
 `InvalidStateError` shows up only on the restart path. Those are exactly the bugs you can't reproduce on
 demand — so they're pinned by tests instead.
 
+### Pre-push hook
+
+There is no CI on this project (spec §12), so a `pre-push` git hook running the full suite (`npm test`
+from the repo root) is the only automatic enforcement of the tests and the 80% coverage gate. It's not
+enabled by default — run this once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
 ---
 
 ## Design
