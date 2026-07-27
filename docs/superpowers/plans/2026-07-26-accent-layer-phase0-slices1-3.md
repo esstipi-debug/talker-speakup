@@ -21,7 +21,8 @@ Every task's requirements implicitly include this section.
 
 - **Repo is plain ESM JavaScript.** No TypeScript. Use JSDoc where types aid clarity. Match surrounding style.
 - **No `Date.now()` in any measurement path.** Timing comes from `AudioContext.currentTime`. (`useConversation.js:154,183` uses `Date.now()` for the listen cap — that is a policy timer, not a measurement, and stays.)
-- **Every threshold is a named exported constant with an `UNCALIBRATED` comment** citing its source. Spec §16.
+- **Every calibration-sensitive threshold is a named exported constant with an `UNCALIBRATED` comment** citing its source, or marking it explicitly as a project-chosen heuristic. Spec §16.
+  *Calibration-sensitive* means a value K3 or later measurement could move: a silence floor, a minimum duration, a surfacing count, a margin. It does **not** cover fixed platform constants (`HOP_SIZE = 128` is the Web Audio render-quantum size, not a threshold) or internal buffer sizing — those stay module-private.
 - **Never encode meaning in colour alone.** WCAG 1.4.1.
 - **No new client runtime dependencies** in this plan. Client `dependencies` stays exactly `react` + `react-dom`.
 - **No GitHub Actions, no Playwright, no supertest.** Spec §12.
@@ -404,11 +405,15 @@ Create `client/src/lib/prosody/pauses.js`:
 /** UNCALIBRATED — de Jong & Bosker 2013: 22-27% of pauses fall below 250ms and are irrelevant. */
 export const PAUSE_MIN_MS = 250;
 
-/** UNCALIBRATED — de Jong & Wempe 2009 use -25 dB relative to the 99% quantile. */
+/**
+ * UNCALIBRATED — de Jong & Wempe 2009 use -25 dB relative to the 99% quantile.
+ * We drop from p95 instead, per spec §5.2's adaptive-floor requirement; do not
+ * go looking for a p99 computation to match the citation.
+ */
 export const FLOOR_DROP_DB = 25;
 
-/** A buffer with no dynamic range at all is silence or noise, not speech. */
-const MIN_DYNAMIC_RANGE_DB = 6;
+/** UNCALIBRATED — project-chosen heuristic: a buffer with no dynamic range at all is silence or noise, not speech. */
+export const MIN_DYNAMIC_RANGE_DB = 6;
 
 function percentile(sorted, p) {
   if (sorted.length === 0) return 0;
