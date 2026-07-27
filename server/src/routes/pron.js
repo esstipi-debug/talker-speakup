@@ -6,6 +6,7 @@ import {
   AUDIO_TOO_LARGE_MESSAGE,
   MAX_AUDIO_BYTES,
   PRON_ERROR_CODES,
+  stripPhones,
   validateAssessInput,
   validateReport,
 } from "../pron/contract.js";
@@ -37,9 +38,9 @@ function uploadSingleAudio(req, res, next) {
  * resp: { version, mode, pronProvider, model, overall, prosody, words }
  *
  * `mode` is the design §3 switch: scripted shows phonemes, unscripted never
- * does. That guarantee is NOT enforced yet — `stripPhones` (../pron/contract.js)
- * is not wired into this route. It lands in a later task; until then a
- * provider that ignores `mode` and returns phones anyway will leak them.
+ * does. That guarantee is enforced here: `stripPhones` (../pron/contract.js)
+ * runs on every response in unscripted mode, for every provider — even one
+ * that ignores `mode` and returns phones anyway.
  */
 router.post("/assess", uploadSingleAudio, async (req, res) => {
   const check = validateAssessInput({
@@ -84,7 +85,10 @@ router.post("/assess", uploadSingleAudio, async (req, res) => {
     });
   }
 
-  return res.json({ ...report, mode, pronProvider: currentPronProvider() });
+  // Design §3: without a trustworthy reference text a per-phoneme score is a
+  // fabricated number. Strip after validation, for every provider, always.
+  const body = mode === "unscripted" ? stripPhones(report) : report;
+  return res.json({ ...body, mode, pronProvider: currentPronProvider() });
 });
 
 /**

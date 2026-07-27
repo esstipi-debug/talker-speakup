@@ -252,3 +252,81 @@ describe("POST /pron/assess — input rejections", () => {
     expect(assess).not.toHaveBeenCalled();
   });
 });
+
+describe("POST /pron/assess — unscripted never carries phonemes (design §3)", () => {
+  async function unscripted(app = createApp()) {
+    return post(app)
+      .field("text", TEXT)
+      .field("mode", "unscripted")
+      .attach("audio", AUDIO, { filename: "drill.webm" });
+  }
+
+  it("strips phones from every word", async () => {
+    const res = await unscripted();
+    expect(res.status).toBe(200);
+    expect(res.body.mode).toBe("unscripted");
+    expect(res.body.words.length).toBeGreaterThan(0);
+    for (const word of res.body.words) {
+      expect(word).not.toHaveProperty("phones");
+    }
+  });
+
+  it("leaves no phone-shaped data anywhere in the serialized body", async () => {
+    const res = await unscripted();
+    const raw = JSON.stringify(res.body);
+    expect(raw).not.toContain('"phones"');
+    expect(raw).not.toContain('"ipa"');
+    expect(raw).not.toContain('"substituted"');
+  });
+
+  it("keeps the word-level and overall numbers, which do not depend on phonemes", async () => {
+    const res = await unscripted();
+    for (const word of res.body.words) {
+      expect(typeof word.word).toBe("string");
+      expect(Number.isInteger(word.accuracy)).toBe(true);
+      expect(word.end).toBeGreaterThanOrEqual(word.start);
+    }
+    expect(res.body.overall.completeness).toBe(100);
+    expect(res.body.prosody.pauseCount).toBeGreaterThanOrEqual(0);
+  });
+
+  it("strips even when the provider ignores mode and returns phones anyway", async () => {
+    assess.mockResolvedValue({
+      version: 1,
+      mode: "scripted",
+      model: "rogue-provider",
+      overall: { accuracy: 50, fluency: 50, completeness: 50 },
+      prosody: {
+        speechRateWpm: 100,
+        articulationRateSyllPerSec: 4,
+        pauseCount: 0,
+        pauseTotalSec: 0,
+        f0MinHz: null,
+        f0MaxHz: null,
+        f0RangeSemitones: null,
+      },
+      words: [
+        {
+          word: "sheep",
+          start: 0,
+          end: 1,
+          accuracy: 50,
+          phones: [{ ipa: "iː", score: 12, start: 0, end: 1, substituted: "ɪ" }],
+        },
+      ],
+    });
+
+    const res = await unscripted();
+    expect(res.status).toBe(200);
+    expect(JSON.stringify(res.body)).not.toContain("substituted");
+    expect(res.body.words[0]).toEqual({ word: "sheep", start: 0, end: 1, accuracy: 50 });
+  });
+
+  it("still returns phones in scripted mode — the strip is mode-gated, not global", async () => {
+    const res = await post(createApp())
+      .field("text", TEXT)
+      .field("mode", "scripted")
+      .attach("audio", AUDIO, { filename: "drill.webm" });
+    expect(res.body.words[0].phones.length).toBeGreaterThan(0);
+  });
+});
