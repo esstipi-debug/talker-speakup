@@ -14,6 +14,7 @@ export default defineConfig({
         "src/pron/contract.js",
         "src/pron/mock.js",
         "src/pron/local.js",
+        "src/pron/azure.js",
         "src/pron/prompts.js",
         "src/routes/pron.js",
       ],
