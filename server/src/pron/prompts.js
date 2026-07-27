@@ -37,8 +37,9 @@ const CONTENT = deepFreeze(
   JSON.parse(readFileSync(new URL("../content/drills.v1.json", import.meta.url), "utf8")),
 );
 
+// CONTENT.focuses is already frozen in place by deepFreeze above — no copy needed.
 /** @type {readonly string[]} */
-export const PROMPT_FOCUSES = Object.freeze([...CONTENT.focuses]);
+export const PROMPT_FOCUSES = CONTENT.focuses;
 
 /**
  * @typedef {object} DrillPrompt
@@ -72,8 +73,12 @@ export function listPrompts({ focus } = {}) {
       error: `Unknown "focus". Valid values: ${PROMPT_FOCUSES.join(", ")}.`,
     };
   }
+  // The unfiltered branch returns the shared, already-frozen CONTENT.prompts array.
+  // Array.prototype.filter always allocates a new, unfrozen array, so the filtered
+  // branch must freeze its own result to keep the same "mutation throws" guarantee
+  // on both paths (elements are already frozen; only the wrapper array is new here).
   const prompts = focus
-    ? CONTENT.prompts.filter((prompt) => prompt.focus === focus)
+    ? Object.freeze(CONTENT.prompts.filter((prompt) => prompt.focus === focus))
     : CONTENT.prompts;
   return {
     ok: true,

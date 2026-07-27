@@ -55,6 +55,14 @@ describe("prompts — filtering", () => {
 describe("prompts — content invariants", () => {
   const prompts = listPrompts().value.prompts;
 
+  // NOTE: nothing in this file checks that `ipaTargets` is phonemically accurate
+  // for a prompt's `text` (e.g. that "ed-ending-03" really does realize /t/, /d/,
+  // and /ɪd/ across its -ed words). That requires a grapheme-to-phoneme (G2P)
+  // engine, which lives in the not-yet-built pronunciation sidecar, not here.
+  // Until that exists, `ipaTargets` correctness is verified by human review only
+  // — the tests below check structural shape (format, keyWords-in-text, focus/level
+  // membership), not phonemic truth.
+
   it("gives every focus at least three prompts", () => {
     for (const focus of FROZEN_FOCUSES) {
       expect(prompts.filter((p) => p.focus === focus).length).toBeGreaterThanOrEqual(3);
@@ -158,10 +166,11 @@ describe("prompts — immutability of the shared set", () => {
     expect(second[0].text).toBe(originalText);
   });
 
-  it("filtering by focus does not mutate the underlying content", () => {
-    const before = listPrompts().value.prompts.length;
-    listPrompts({ focus: "ae" });
-    const after = listPrompts().value.prompts.length;
-    expect(after).toBe(before);
+  it("freezes the filtered array too, not just the unfiltered shared one", () => {
+    const { prompts } = listPrompts({ focus: "ae" }).value;
+    expect(Object.isFrozen(prompts)).toBe(true);
+    expect(() => {
+      prompts.push({ id: "hack-03", focus: "ae", text: "x", ipaTargets: ["x"], keyWords: ["x"], contrast: "x", level: "A2" });
+    }).toThrow(TypeError);
   });
 });

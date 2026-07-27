@@ -186,9 +186,9 @@
     {
       "id": "ed-ending-03",
       "focus": "ed-ending",
-      "text": "He watched the film and needed a break.",
+      "text": "He watched the film, closed the door, and needed a break.",
       "ipaTargets": ["t", "d", "ɪd"],
-      "keyWords": ["watched", "needed"],
+      "keyWords": ["watched", "closed", "needed"],
       "contrast": "/t/ /d/ /ɪd/ allomorphy",
       "level": "B1"
     }
