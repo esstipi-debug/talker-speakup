@@ -1,3 +1,4 @@
+import http from "node:http";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import request from "supertest";
 import { createApp } from "./app.js";
@@ -33,9 +34,19 @@ describe("createApp — wiring", () => {
     expect(createApp()).not.toBe(createApp());
   });
 
-  it("does not start a listener on import", () => {
-    const app = createApp();
-    expect(typeof app.listen).toBe("function");
-    expect(app.listening).toBeUndefined();
+  it("does not start a listener when constructing the app", () => {
+    // app.listen() ultimately delegates to http.Server#listen — Express's
+    // app.listen() creates an http.Server and calls .listen() on it. Spying
+    // on the prototype method catches that call regardless of how deep it's
+    // buried, unlike checking `app.listening` (which Node only flips to true
+    // asynchronously after the TCP bind completes, so it reads `undefined`
+    // right after createApp() returns whether or not .listen() was called).
+    const listenSpy = vi.spyOn(http.Server.prototype, "listen");
+
+    createApp();
+
+    expect(listenSpy).not.toHaveBeenCalled();
+    // vi.restoreAllMocks() in the afterEach above restores this spy so it
+    // cannot leak into other tests in this file.
   });
 });
