@@ -8,6 +8,18 @@ import {
   stopSpeaking,
   warmUpVoices,
 } from "../lib/speech.js";
+import {
+  getMicStream,
+  micNowMs,
+  resetFrames,
+  getFrames,
+  getHopMs,
+  stopFrames,
+  getCaptureSettings,
+} from "../lib/micStream.js";
+import { detectPauses } from "../lib/prosody/pauses.js";
+import { classifyPauses, summarise } from "../lib/prosody/placement.js";
+import { pauseSentence } from "../lib/prosody/summary.js";
 
 const GREETING =
   "Hi! I'm your SpeakUp coach. Tap the mic and tell me about your day — let's practice some English.";
@@ -15,6 +27,8 @@ const GREETING =
 const MAX_LISTEN_MS = 120000; // hard cap so a stuck session can't listen forever
 const MAX_EMPTY_RESTARTS = 6; // guard against tight restart loops on a silent/broken mic
 const NO_SPEECH_MSG = "Didn't catch that — try again or type.";
+/** UNCALIBRATED — spec §7.4: at most one pause note per this many turns. */
+const PAUSE_NOTE_TURN_INTERVAL = 3;
 
 /**
  * Owns the whole conversation loop: providers, the turn round-trip, a single
@@ -30,6 +44,9 @@ export function useConversation() {
   const [error, setError] = useState(null);
   const [providers, setProviders] = useState({ brain: null, tts: null, stt: null });
   const [ttsFallbackActive, setTtsFallbackActive] = useState(false);
+  const [pauseNote, setPauseNote] = useState(null);
+  const [sessionPauseCounts, setSessionPauseCounts] = useState({ total: 0, internal: 0, boundary: 0, unknown: 0 });
+  const finalizationsRef = useRef([]);
 
   const recognizerRef = useRef(null);
   const userStoppedRef = useRef(false);
@@ -38,6 +55,10 @@ export function useConversation() {
   const emptyRestartsRef = useRef(0);
   const currentAudioRef = useRef(null);
   const speakTimerRef = useRef(null);
+  const sessionIdRef = useRef(null);
+  const lastTurnProsodyRef = useRef(null);
+  const turnIndexRef = useRef(0); // counts completed recordings, for pause-note throttling
+  const lastNoteTurnRef = useRef(-Infinity); // turnIndexRef value when a note was last shown
 
   const statusRef = useRef("idle");
   const draftRef = useRef("");
@@ -96,11 +117,33 @@ export function useConversation() {
     const historyBefore = messagesRef.current;
     setMessages((prev) => [...prev, userMsg]);
     setStatus("thinking");
+    // Read at the moment the turn is actually sent — not when it was merely
+    // recorded — so a re-recorded or cancelled take never reaches here at all.
+    const prosody = lastTurnProsodyRef.current;
+    const captureSettings = getCaptureSettings();
     try {
-      const { coach_reply, xp, audio, audioFormat } = await postTurn({
+      const { coach_reply, xp, audio, audioFormat, sessionId } = await postTurn({
         utterance,
         history: [...historyBefore, userMsg],
+        sessionId: sessionIdRef.current,
+        prosody,
+        captureSettings,
       });
+      // A dead id comes back as null (server-side fix): keep it null so the
+      // client opens a fresh session next turn instead of retrying forever.
+      sessionIdRef.current = sessionId ?? null;
+      lastTurnProsodyRef.current = null;
+      // Only accumulate once the send has actually succeeded: a failed
+      // request can be retried from the same review state without the same
+      // take being counted twice.
+      if (prosody) {
+        setSessionPauseCounts((prev) => ({
+          total: prev.total + prosody.total,
+          internal: prev.internal + prosody.internal,
+          boundary: prev.boundary + prosody.boundary,
+          unknown: prev.unknown + prosody.unknown,
+        }));
+      }
       setMessages((prev) => [...prev, { role: "coach", text: coach_reply, audio, audioFormat }]);
       if (typeof xp === "number") setTotalXp((v) => v + xp);
 
@@ -117,7 +160,35 @@ export function useConversation() {
   }
 
   // ---------------- speech capture ----------------
+  /**
+   * Runs once at end of turn, on the main thread, over the buffered contour.
+   * It cannot stream: the silence floor is a global statistic over the whole
+   * utterance (spec §5.2, M1).
+   */
+  function computePauseProfile() {
+    const frames = getFrames();
+    stopFrames(); // measurement window is over — stop the worklet handler from growing the buffer further
+    const pauses = detectPauses(frames, { hopMs: getHopMs() });
+    const classified = classifyPauses(pauses, finalizationsRef.current);
+    const counts = summarise(classified);
+    // The session tally is NOT touched here: it only accumulates once the
+    // learner actually sends the turn (see runTurn) — otherwise a re-recorded
+    // or cancelled take would be counted before the learner ever decided.
+    lastTurnProsodyRef.current = counts;
+
+    turnIndexRef.current += 1;
+    const sentence = pauseSentence(counts);
+    const turnsSinceLastNote = turnIndexRef.current - lastNoteTurnRef.current;
+    if (sentence && turnsSinceLastNote >= PAUSE_NOTE_TURN_INTERVAL) {
+      lastNoteTurnRef.current = turnIndexRef.current;
+      setPauseNote(sentence);
+    } else {
+      setPauseNote(null);
+    }
+  }
+
   function finishListening(announceEmpty) {
+    computePauseProfile();
     const combined = `${draftRef.current} ${interimRef.current}`.trim();
     setInterim("");
     if (combined) {
@@ -161,6 +232,7 @@ export function useConversation() {
     // Deferred to the next tick: restarting the same recognizer synchronously
     // inside its own onend can throw InvalidStateError in Chrome mid-teardown.
     emptyRestartsRef.current += 1;
+    finalizationsRef.current.push({ tMs: micNowMs(), text: "" });
     setTimeout(() => {
       if (statusRef.current !== "listening") return; // a stop()/cancel() may have raced the deferred restart
       try {
@@ -181,10 +253,15 @@ export function useConversation() {
     fatalRef.current = false;
     emptyRestartsRef.current = 0;
     listenStartRef.current = Date.now();
+    finalizationsRef.current = [];
+    setPauseNote(null);
+    resetFrames();
+    getMicStream().catch(() => { /* capture is optional; the turn still works */ });
     const rec = createRecognizer({
       onStart: () => setStatus("listening"),
       onResult: (chunk) => {
         emptyRestartsRef.current = 0;
+        finalizationsRef.current.push({ tMs: micNowMs(), text: chunk });
         setDraft((d) => `${d} ${chunk}`.trim());
       },
       onInterim: (tail) => setInterim(tail),
@@ -243,6 +320,9 @@ export function useConversation() {
     setInterim("");
     setError(null);
     setStatus("idle");
+    // This take is discarded forever — never let it surface as the prosody
+    // for some later, unrelated turn (e.g. one typed instead of recorded).
+    lastTurnProsodyRef.current = null;
   }
 
   function interrupt() {
@@ -277,6 +357,8 @@ export function useConversation() {
     error,
     providers,
     ttsFallbackActive,
+    pauseNote,
+    sessionPauseCounts,
     sttSupported: isSTTSupported(),
     turns: messages.filter((m) => m.role === "user").length,
     startListening,

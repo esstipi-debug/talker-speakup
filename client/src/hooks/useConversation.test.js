@@ -38,6 +38,17 @@ vi.mock("../lib/speech.js", async () => {
     },
   };
 });
+vi.mock("../lib/micStream.js", () => ({
+  getMicStream: vi.fn(async () => {}),
+  releaseMicStream: vi.fn(),
+  micNowMs: vi.fn(() => 0),
+  resetFrames: vi.fn(),
+  stopFrames: vi.fn(),
+  getFrames: vi.fn(() => new Float32Array(0)),
+  getHopMs: vi.fn(() => 10),
+  getCaptureSettings: vi.fn(() => null),
+  isMicOpen: vi.fn(() => true),
+}));
 
 import { postTurn, getHealth } from "../lib/api.js";
 import { playAudio, speak, stopSpeaking } from "../lib/speech.js";
@@ -501,5 +512,207 @@ describe("useConversation — speech machine", () => {
     expect(result.current.error).toMatch(/didn't catch that/i);
     act(() => result.current.clearError());
     expect(result.current.error).toBeNull();
+  });
+});
+
+describe("useConversation — pause profile", () => {
+  async function mountedProsody() {
+    const utils = renderHook(() => useConversation());
+    await waitFor(() => expect(utils.result.current.providers.tts).toBe("kokoro"));
+    return utils;
+  }
+
+  /** [durationMs, dB] segments at the 10ms hop getHopMs is mocked to report. */
+  function buildFrames(segments) {
+    const out = [];
+    for (const [ms, db] of segments) for (let i = 0; i < ms / 10; i += 1) out.push(db);
+    return Float32Array.from(out);
+  }
+
+  let mic;
+
+  beforeEach(async () => {
+    mic = await import("../lib/micStream.js");
+    // The module mock persists across tests; the top-level beforeEach doesn't know about it.
+    mic.getMicStream.mockClear();
+    mic.resetFrames.mockClear();
+    mic.stopFrames.mockClear();
+    mic.getFrames.mockReturnValue(new Float32Array(0));
+    mic.getHopMs.mockReturnValue(10);
+    mic.micNowMs.mockReturnValue(0);
+  });
+
+  it("opens capture and clears the frame buffer when listening starts", async () => {
+    const { result } = await mountedProsody();
+    await act(async () => { result.current.startListening(); });
+    expect(mic.getMicStream).toHaveBeenCalled();
+    expect(mic.resetFrames).toHaveBeenCalled();
+  });
+
+  it("stays silent when the turn had fewer than three mid-phrase breaks", async () => {
+    // 1s speech / 400ms silence / 1s speech -> one pause, and with the only
+    // finalization at t=0 it classifies as trailing-unknown, not internal.
+    mic.getFrames.mockReturnValue(buildFrames([[1000, -20], [400, -70], [1000, -20]]));
+    const { result } = await mountedProsody();
+    await act(async () => { result.current.startListening(); });
+    act(() => recHandlers.onResult("hello there"));
+    await act(async () => { result.current.stopListening(); });
+    expect(result.current.pauseNote).toBeNull();
+  });
+
+  it("surfaces one sentence once three mid-phrase breaks are detected", async () => {
+    mic.getFrames.mockReturnValue(
+      buildFrames([[500, -20], [300, -70], [500, -20], [300, -70], [500, -20], [300, -70], [500, -20]]),
+    );
+    let t = 0;
+    mic.micNowMs.mockImplementation(() => (t += 5000)); // finalizations land after every pause
+    const { result } = await mountedProsody();
+    await act(async () => { result.current.startListening(); });
+    act(() => recHandlers.onResult("I think"));
+    act(() => recHandlers.onResult("that we should go"));
+    await act(async () => { result.current.stopListening(); });
+    expect(result.current.pauseNote).toMatch(/broke mid-phrase 3/);
+  });
+
+  it("does not clear the frame buffer when the recognizer auto-restarts mid-turn", async () => {
+    const { result } = await mountedProsody();
+    await act(async () => { result.current.startListening(); });
+    mic.resetFrames.mockClear();
+    await act(async () => { recHandlers.onEnd(); }); // silence self-termination -> restart
+    expect(mic.resetFrames).not.toHaveBeenCalled();
+  });
+
+  it("stops the frame collector once the pause profile has been read, so idle time can't grow the buffer", async () => {
+    const { result } = await mountedProsody();
+    await act(async () => { result.current.startListening(); });
+    act(() => recHandlers.onResult("hello"));
+    await act(async () => { result.current.stopListening(); });
+    expect(mic.stopFrames).toHaveBeenCalled();
+  });
+
+  it("throttles the pause note to at most once per PAUSE_NOTE_TURN_INTERVAL turns", async () => {
+    mic.getFrames.mockReturnValue(
+      buildFrames([[500, -20], [300, -70], [500, -20], [300, -70], [500, -20], [300, -70], [500, -20]]),
+    );
+    let t = 0;
+    mic.micNowMs.mockImplementation(() => (t += 5000)); // finalizations land after every pause -> internal
+    const { result } = await mountedProsody();
+
+    // First qualifying turn: the note is shown.
+    await act(async () => { result.current.startListening(); });
+    act(() => recHandlers.onResult("I think"));
+    act(() => recHandlers.onResult("that we should go"));
+    await act(async () => { result.current.stopListening(); });
+    expect(result.current.pauseNote).toMatch(/broke mid-phrase 3/);
+
+    // A second, equally-qualifying turn immediately after: throttled to null.
+    // The nagging the spec rejects is exactly this — a note on every turn.
+    await act(async () => { result.current.startListening(); });
+    act(() => recHandlers.onResult("I think"));
+    act(() => recHandlers.onResult("that we should go"));
+    await act(async () => { result.current.stopListening(); });
+    expect(result.current.pauseNote).toBeNull();
+  });
+
+  it("does not surface a note when finalizations land inside the pause windows instead of after them", async () => {
+    // Same contour as "surfaces one sentence..." above (three 300ms mid-phrase
+    // breaks), but the finalizations land INSIDE each pause window rather than
+    // after all of them — the correct behaviour reclassifies every pause as a
+    // clause boundary. If micNowMs's epoch were ever wrong by a whole turn
+    // (making every mark look like it landed after the contour instead), this
+    // is the test that would catch it: every pause would wrongly read as
+    // internal and the note would wrongly fire.
+    mic.getFrames.mockReturnValue(
+      buildFrames([[500, -20], [300, -70], [500, -20], [300, -70], [500, -20], [300, -70], [500, -20]]),
+    );
+    const insideEachPauseWindow = [650, 1450, 2250]; // midpoints of [500,800], [1300,1600], [2100,2400]
+    let i = 0;
+    mic.micNowMs.mockImplementation(() => insideEachPauseWindow[i++]);
+    const { result } = await mountedProsody();
+    await act(async () => { result.current.startListening(); });
+    act(() => recHandlers.onResult("I think"));
+    act(() => recHandlers.onResult("that"));
+    act(() => recHandlers.onResult("we should go"));
+    await act(async () => { result.current.stopListening(); });
+    expect(result.current.pauseNote).toBeNull();
+  });
+
+  it("counts only the take that was actually sent — not a re-recorded and discarded one", async () => {
+    let t = 0;
+    mic.micNowMs.mockImplementation(() => (t += 5000)); // finalizations always land after the contour -> internal
+
+    const { result } = await mountedProsody();
+
+    // First take: 3 internal breaks. Never sent — the learner re-records instead.
+    mic.getFrames.mockReturnValue(
+      buildFrames([[500, -20], [300, -70], [500, -20], [300, -70], [500, -20], [300, -70], [500, -20]]),
+    );
+    await act(async () => { result.current.startListening(); });
+    act(() => recHandlers.onResult("I think"));
+    act(() => recHandlers.onResult("that we should go"));
+    await act(async () => { result.current.stopListening(); }); // -> review
+    act(() => result.current.reRecord()); // discard take 1, back to listening
+
+    // Second take: 1 internal break. This is the one actually sent.
+    mic.getFrames.mockReturnValue(buildFrames([[500, -20], [300, -70], [500, -20]]));
+    act(() => recHandlers.onResult("hello"));
+    await act(async () => { result.current.stopListening(); }); // -> review
+
+    postTurn.mockResolvedValue({ coach_reply: "ok", xp: 1, sessionId: "s1" });
+    act(() => result.current.send());
+    await waitFor(() => expect(postTurn).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(result.current.sessionPauseCounts.internal).toBe(1));
+    expect(result.current.sessionPauseCounts.total).toBe(1);
+  });
+
+  it("never counts a cancelled take, even against a later turn that was only typed", async () => {
+    mic.getFrames.mockReturnValue(
+      buildFrames([[500, -20], [300, -70], [500, -20], [300, -70], [500, -20], [300, -70], [500, -20]]),
+    );
+    let t = 0;
+    mic.micNowMs.mockImplementation(() => (t += 5000));
+
+    const { result } = await mountedProsody();
+    await act(async () => { result.current.startListening(); });
+    act(() => recHandlers.onResult("I think"));
+    act(() => recHandlers.onResult("that we should go"));
+    await act(async () => { result.current.stopListening(); }); // -> review, 3 internal breaks pending
+    act(() => result.current.cancel()); // discarded forever, never sent
+
+    postTurn.mockResolvedValue({ coach_reply: "ok", xp: 1, sessionId: "s1" });
+    act(() => result.current.submitText("typed instead"));
+    await waitFor(() => expect(postTurn).toHaveBeenCalledTimes(1));
+    expect(postTurn.mock.calls[0][0].prosody).toBeNull();
+    await waitFor(() => expect(result.current.status).toBe("idle"));
+    expect(result.current.sessionPauseCounts).toEqual({ total: 0, internal: 0, boundary: 0, unknown: 0 });
+  });
+});
+
+describe("useConversation — session id handling", () => {
+  it("stops re-sending a session id once the server signals it could not write to it", async () => {
+    // The server deliberately echoes sessionId: null when a write failed, so the
+    // client opens a fresh session next turn instead of retrying a dead one
+    // forever. `null` is falsy, so `if (sessionId) ...` would silently keep the
+    // old id — this pins the fix: `sessionIdRef.current = sessionId ?? null`.
+    postTurn.mockResolvedValueOnce({ coach_reply: "one", xp: 1, sessionId: "s1" });
+    postTurn.mockResolvedValueOnce({ coach_reply: "two", xp: 1, sessionId: null });
+    postTurn.mockResolvedValueOnce({ coach_reply: "three", xp: 1, sessionId: "s3" });
+    const { result } = renderHook(() => useConversation());
+    await waitFor(() => expect(result.current.providers.tts).toBe("kokoro"));
+
+    act(() => result.current.submitText("first"));
+    await waitFor(() => expect(postTurn).toHaveBeenCalledTimes(1));
+    expect(postTurn.mock.calls[0][0].sessionId).toBeNull(); // nothing adopted yet
+    await waitFor(() => expect(result.current.status).toBe("idle"));
+
+    act(() => result.current.submitText("second"));
+    await waitFor(() => expect(postTurn).toHaveBeenCalledTimes(2));
+    expect(postTurn.mock.calls[1][0].sessionId).toBe("s1"); // adopted from turn 1
+    await waitFor(() => expect(result.current.status).toBe("idle"));
+
+    act(() => result.current.submitText("third"));
+    await waitFor(() => expect(postTurn).toHaveBeenCalledTimes(3));
+    // Turn 2 came back with sessionId: null — the dead id must NOT still be "s1".
+    expect(postTurn.mock.calls[2][0].sessionId).toBeNull();
   });
 });

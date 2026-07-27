@@ -17,6 +17,7 @@ export default function VoiceStatus({
   error,
   ttsFallbackActive,
   sttSupported,
+  pauseNote,
   onDismissError,
 }) {
   return (
@@ -25,6 +26,10 @@ export default function VoiceStatus({
         {status === "listening" && liveTranscript
           ? liveTranscript
           : STATUS_LABEL[status] || ""}
+        {/* Carries the same sentence PauseNote shows visibly (spec §8.4) — this
+            is the single polite announcement for it (spec §8.1); PauseNote
+            itself is deliberately not a live region. */}
+        {pauseNote && <span className="sr-only">{pauseNote}</span>}
       </div>
 
       {!sttSupported && (

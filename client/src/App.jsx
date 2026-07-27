@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import StatHeader from "./components/StatHeader.jsx";
 import MessageBubble from "./components/MessageBubble.jsx";
 import MicButton from "./components/MicButton.jsx";
 import TranscriptReview from "./components/TranscriptReview.jsx";
 import VoiceStatus from "./components/VoiceStatus.jsx";
+import PauseNote from "./components/PauseNote.jsx";
 import { useConversation } from "./hooks/useConversation.js";
 
 export default function App() {
@@ -16,6 +17,7 @@ export default function App() {
   }, [c.messages, c.status, c.liveTranscript]);
 
   const busy = c.status === "thinking";
+  const lastUserIndex = c.messages.findLastIndex((m) => m.role === "user");
   const micButtonRef = useRef(null);
   const prevStatusRef = useRef(c.status);
   const pendingMicFocusRef = useRef(false);
@@ -62,12 +64,14 @@ export default function App() {
 
       <main ref={scrollRef} className="flex-1 overflow-y-auto px-5 py-6 space-y-4">
         {c.messages.map((m, i) => (
-          <MessageBubble
-            key={i}
-            role={m.role}
-            text={m.text}
-            onReplay={m.role === "coach" && c.status === "idle" ? () => c.replay(m) : undefined}
-          />
+          <Fragment key={i}>
+            <MessageBubble
+              role={m.role}
+              text={m.text}
+              onReplay={m.role === "coach" && c.status === "idle" ? () => c.replay(m) : undefined}
+            />
+            {i === lastUserIndex && <PauseNote note={c.pauseNote} />}
+          </Fragment>
         ))}
         {c.status === "thinking" && (
           <p className="text-xs text-muted pl-1">coach is composing a reply…</p>
@@ -81,6 +85,7 @@ export default function App() {
           error={c.error}
           ttsFallbackActive={c.ttsFallbackActive}
           sttSupported={c.sttSupported}
+          pauseNote={c.pauseNote}
           onDismissError={c.clearError}
         />
 

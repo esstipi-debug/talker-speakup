@@ -11,7 +11,13 @@ export default defineConfig({
     css: false,
     coverage: {
       provider: "v8",
-      include: ["src/hooks/useConversation.js", "src/lib/speech.js"],
+      include: [
+        "src/hooks/useConversation.js",
+        "src/lib/speech.js",
+        "src/lib/micStream.js",
+        "src/lib/prosody/**/*.js",
+      ],
+      exclude: ["src/lib/prosody/*.worklet.js"],
       thresholds: { lines: 80, functions: 80, branches: 80, statements: 80 },
     },
   },
