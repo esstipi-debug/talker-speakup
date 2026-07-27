@@ -2,8 +2,9 @@ import { clampScore, PRON_ERROR_CODES, validateReport } from "./contract.js";
 
 /**
  * Azure Speech pronunciation-assessment adapter — CALIBRATION ONLY (design §2,
- * "Cloud as a runtime path" is a non-goal). Selected only by an explicit
- * PRON_PROVIDER=azure with AZURE_SPEECH_KEY present.
+ * "Cloud as a runtime path" is a non-goal). This class enforces presence of
+ * AZURE_SPEECH_KEY and AZURE_SPEECH_REGION; provider selection is delegated to
+ * the factory that instantiates this class.
  *
  * EXTERNAL CALL SITE — verified 2026-07-27 against:
  *   - https://learn.microsoft.com/azure/ai-services/speech-service/rest-speech-to-text-short
@@ -29,6 +30,7 @@ import { clampScore, PRON_ERROR_CODES, validateReport } from "./contract.js";
  *     `https://{YourResourceName}.cognitiveservices.azure.com/stt/speech/recognition/...`.
  *     That page no longer shows the regional hostname anywhere. Which host
  *     (or whether both work) could not be confirmed from documentation alone.
+ *     Override via AZURE_SPEECH_ENDPOINT when using a different host.
  *   - `PhonemeAlphabet` is not listed in that same REST parameter table (only
  *     ReferenceText/GradingSystem/Granularity/Dimension/EnableMiscue/
  *     EnableProsodyAssessment/ScenarioId are). It only appears, camelCase
@@ -110,10 +112,11 @@ function _toReport(azureJson) {
 
 export class AzurePron {
   constructor() {
-    this.apiKey = process.env.AZURE_SPEECH_KEY;
+    this.apiKey = process.env.AZURE_SPEECH_KEY?.trim() || null;
     this.region = process.env.AZURE_SPEECH_REGION?.trim() || null;
     this.locale = process.env.AZURE_SPEECH_LOCALE?.trim() || DEFAULTS.locale;
     this.timeoutMs = Number(process.env.AZURE_SPEECH_TIMEOUT_MS) || DEFAULTS.timeoutMs;
+    this.endpoint = process.env.AZURE_SPEECH_ENDPOINT?.trim() || null;
   }
 
   _assessmentHeader(text) {
@@ -142,8 +145,9 @@ export class AzurePron {
       throw err;
     }
 
+    const baseUrl = this.endpoint || `https://${this.region}.stt.speech.microsoft.com`;
     const url =
-      `https://${this.region}.stt.speech.microsoft.com` +
+      baseUrl +
       `/speech/recognition/conversation/cognitiveservices/v1?language=${encodeURIComponent(this.locale)}`;
 
     const controller = new AbortController();

@@ -46,10 +46,16 @@ beforeEach(() => {
   delete process.env.AZURE_SPEECH_REGION;
   delete process.env.AZURE_SPEECH_LOCALE;
   delete process.env.AZURE_SPEECH_TIMEOUT_MS;
+  delete process.env.AZURE_SPEECH_ENDPOINT;
   vi.stubGlobal("fetch", vi.fn());
 });
 
 afterEach(() => {
+  delete process.env.AZURE_SPEECH_KEY;
+  delete process.env.AZURE_SPEECH_REGION;
+  delete process.env.AZURE_SPEECH_LOCALE;
+  delete process.env.AZURE_SPEECH_TIMEOUT_MS;
+  delete process.env.AZURE_SPEECH_ENDPOINT;
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -67,6 +73,16 @@ describe("azure — guards", () => {
     await expect(new AzurePron().assess(AUDIO, { text: "sheep" })).rejects.toThrow(
       "Azure pron requires AZURE_SPEECH_KEY and AZURE_SPEECH_REGION.",
     );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("refuses a whitespace-only key before any fetch", async () => {
+    process.env.AZURE_SPEECH_KEY = "   \t  ";
+    process.env.AZURE_SPEECH_REGION = "westeurope";
+    await expect(new AzurePron().assess(AUDIO, { text: "sheep" })).rejects.toThrow(
+      "Azure pron requires AZURE_SPEECH_KEY and AZURE_SPEECH_REGION.",
+    );
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
 
@@ -92,6 +108,24 @@ describe("azure — assess", () => {
       Granularity: "Phoneme",
       PhonemeAlphabet: "IPA",
     });
+  });
+
+  it("uses AZURE_SPEECH_ENDPOINT when set", async () => {
+    process.env.AZURE_SPEECH_ENDPOINT = "https://custom-endpoint.cognitiveservices.azure.com";
+    fetch.mockResolvedValue(response(AZURE_BODY));
+    await new AzurePron().assess(AUDIO, { text: "sheep" });
+
+    const [url] = fetch.mock.calls[0];
+    expect(url).toContain("https://custom-endpoint.cognitiveservices.azure.com/");
+    expect(url).not.toContain("westeurope.stt.speech.microsoft.com");
+  });
+
+  it("uses default endpoint when AZURE_SPEECH_ENDPOINT is not set", async () => {
+    fetch.mockResolvedValue(response(AZURE_BODY));
+    await new AzurePron().assess(AUDIO, { text: "sheep" });
+
+    const [url] = fetch.mock.calls[0];
+    expect(url).toContain("https://westeurope.stt.speech.microsoft.com/");
   });
 
   it("maps the Azure body onto a valid PronunciationReport with seconds, not ticks", async () => {
