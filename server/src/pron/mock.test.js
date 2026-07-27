@@ -115,4 +115,28 @@ describe("mock — MockPron.assess", () => {
     expect(prosody.f0RangeSemitones).toBeNull();
     expect(prosody.pauseCount).toBeGreaterThanOrEqual(0);
   });
+
+  it("handles empty string input and returns a valid report", async () => {
+    const report = await new MockPron().assess(AUDIO, { text: "" });
+    expect(validateReport(report)).toEqual({ ok: true });
+    expect(report.words.length).toBeGreaterThan(0);
+  });
+
+  it("handles whitespace-only input and returns a valid report", async () => {
+    const report = await new MockPron().assess(AUDIO, { text: "   " });
+    expect(validateReport(report)).toEqual({ ok: true });
+    expect(report.words.length).toBeGreaterThan(0);
+  });
+
+  it("is deterministic for empty string input", async () => {
+    const a = await new MockPron().assess(AUDIO, { text: "" });
+    const b = await new MockPron().assess(AUDIO, { text: "" });
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+  });
+
+  it("is deterministic for whitespace-only input", async () => {
+    const a = await new MockPron().assess(AUDIO, { text: "   " });
+    const b = await new MockPron().assess(AUDIO, { text: "   " });
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+  });
 });

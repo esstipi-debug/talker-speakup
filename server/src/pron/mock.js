@@ -40,7 +40,8 @@ function splitWords(text) {
   const cleaned = raw.map((word) => word.replace(PUNCTUATION, "")).filter(Boolean);
   // "..." strips to nothing; a report with zero words fails validateReport, so
   // keep the raw tokens instead of emitting an invalid report.
-  return cleaned.length ? cleaned : raw;
+  // If both are empty (e.g., empty or whitespace-only input), return a placeholder.
+  return cleaned.length ? cleaned : (raw.length ? raw : [" "]);
 }
 
 export class MockPron {
