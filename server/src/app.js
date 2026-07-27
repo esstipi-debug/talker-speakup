@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import turnRouter from "./routes/turn.js";
+import pronRouter from "./routes/pron.js";
 import { currentProvider } from "./brain/index.js";
 import { currentTTSProvider } from "./tts/index.js";
 import { currentSTTProvider } from "./stt/index.js";
@@ -30,6 +31,7 @@ export function createApp() {
   });
 
   app.use("/turn", turnRouter);
+  app.use("/pron", pronRouter);
 
   // Fallback error handler so nothing crashes the single-user server.
   app.use((err, _req, res, _next) => {
