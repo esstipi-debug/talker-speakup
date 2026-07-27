@@ -77,6 +77,17 @@ describe("pron factory — provider resolution", () => {
     expect(currentPronProvider()).toBe("mock");
   });
 
+  it("never auto-selects azure from AZURE_SPEECH_KEY presence alone", async () => {
+    const { getPron, currentPronProvider } = await loadPron({
+      PRON_PROVIDER: undefined,
+      AZURE_SPEECH_KEY: "secret",
+      AZURE_SPEECH_REGION: "westus",
+    });
+    const { MockPron } = await import("./mock.js");
+    expect(getPron()).toBeInstanceOf(MockPron);
+    expect(currentPronProvider()).toBe("mock");
+  });
+
   it("warns and falls back to mock on an unknown provider", async () => {
     const { currentPronProvider } = await loadPron({ PRON_PROVIDER: "elsa" });
     expect(currentPronProvider()).toBe("mock");
