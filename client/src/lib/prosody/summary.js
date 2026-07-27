@@ -5,7 +5,7 @@
  * live-region announcement and any aria-label summary all reuse it verbatim.
  */
 
-/** UNCALIBRATED — below this the signal is indistinguishable from normal speech planning. */
+/** UNCALIBRATED — project-chosen heuristic: below 3 breaks, the signal is indistinguishable from normal speech planning. */
 export const MIN_INTERNAL_TO_SURFACE = 3;
 
 /**
@@ -26,5 +26,6 @@ export function pauseSentence(counts) {
  */
 export function sessionPauseSentence(counts) {
   if (!counts || counts.internal < 1) return null;
-  return `You broke mid-phrase ${counts.internal} times today. Tomorrow starts with chunking.`;
+  const n = counts.internal;
+  return `You broke mid-phrase ${n} ${n === 1 ? "time" : "times"} today. Tomorrow starts with chunking.`;
 }
