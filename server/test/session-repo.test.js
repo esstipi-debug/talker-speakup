@@ -35,4 +35,19 @@ describe("session repo", () => {
     const loaded = await getSessionWithTurns(s.id);
     expect(loaded.turns[0].prosody).toBeNull();
   });
+
+  it("survives one unreadable row instead of failing the whole session read", async () => {
+    const s = await startSession();
+    await recordTurn({ sessionId: s.id, role: "user", text: "first", prosody: { total: 1, internal: 1, boundary: 0, unknown: 0 } });
+    const bad = await recordTurn({ sessionId: s.id, role: "user", text: "corrupt" });
+    // Simulate corruption reaching the column by any route other than recordTurn.
+    await getPrisma().turn.update({ where: { id: bad.id }, data: { prosody: "{not json" } });
+    await recordTurn({ sessionId: s.id, role: "coach", text: "third" });
+
+    const loaded = await getSessionWithTurns(s.id);
+    expect(loaded.turns).toHaveLength(3);
+    expect(loaded.turns[0].prosody).toEqual({ total: 1, internal: 1, boundary: 0, unknown: 0 });
+    expect(loaded.turns[1].prosody).toBeNull(); // the bad row degrades, alone
+    expect(loaded.turns[2].text).toBe("third"); // and the rows after it still arrive
+  });
 });
