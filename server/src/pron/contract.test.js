@@ -138,4 +138,21 @@ describe("contract — validateAssessInput", () => {
   it("does not throw when called with no argument at all", () => {
     expect(validateAssessInput().code).toBe("MISSING_AUDIO");
   });
+
+  it("rejects bad text before bad mode", () => {
+    const result = validateAssessInput({ text: "", mode: "freestyle", audioBytes: 2048 });
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe(PRON_ERROR_CODES.MISSING_TEXT);
+  });
+
+  it("accepts audio exactly at the MAX_AUDIO_BYTES boundary", () => {
+    const result = validateAssessInput({ ...ok, audioBytes: MAX_AUDIO_BYTES });
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects negative audioBytes as missing audio", () => {
+    const result = validateAssessInput({ ...ok, audioBytes: -1 });
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe(PRON_ERROR_CODES.MISSING_AUDIO);
+  });
 });
