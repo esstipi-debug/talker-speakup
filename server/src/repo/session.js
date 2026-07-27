@@ -2,16 +2,24 @@ import { getPrisma } from "../db.js";
 
 /**
  * The only module that writes Session/Turn. Keeping the JSON encode/decode of
- * `prosody` here means no caller ever sees a string where it expects counts.
+ * `prosody` and `captureSettings` here means no caller ever sees a string
+ * where it expects counts or a settings object.
  */
 
 export async function startSession() {
   return getPrisma().session.create({ data: {} });
 }
 
-export async function recordTurn({ sessionId, role, text, xp = null, prosody = null }) {
+export async function recordTurn({ sessionId, role, text, xp = null, prosody = null, captureSettings = null }) {
   return getPrisma().turn.create({
-    data: { sessionId, role, text, xp, prosody: prosody ? JSON.stringify(prosody) : null },
+    data: {
+      sessionId,
+      role,
+      text,
+      xp,
+      prosody: prosody ? JSON.stringify(prosody) : null,
+      captureSettings: captureSettings ? JSON.stringify(captureSettings) : null,
+    },
   });
 }
 
@@ -25,7 +33,11 @@ export async function getSessionWithTurns(id) {
 }
 
 function decodeTurn(turn) {
-  return { ...turn, prosody: parseProsody(turn.prosody) };
+  return {
+    ...turn,
+    prosody: parseJsonColumn(turn.prosody, "prosody"),
+    captureSettings: parseJsonColumn(turn.captureSettings, "captureSettings"),
+  };
 }
 
 /**
@@ -37,12 +49,12 @@ function decodeTurn(turn) {
  * loudly at the call site, in the caller's face, rather than silently
  * corrupting somebody else's later read.
  */
-function parseProsody(raw) {
+function parseJsonColumn(raw, columnName) {
   if (!raw) return null;
   try {
     return JSON.parse(raw);
   } catch {
-    console.warn("[repo] discarding unreadable prosody payload");
+    console.warn(`[repo] discarding unreadable ${columnName} payload`);
     return null;
   }
 }

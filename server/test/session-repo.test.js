@@ -36,6 +36,32 @@ describe("session repo", () => {
     expect(loaded.turns[0].prosody).toBeNull();
   });
 
+  it("round-trips the capture settings payload as an object", async () => {
+    const s = await startSession();
+    const settings = { sampleRate: 48000, echoCancellation: false, autoGainControl: false, channelCount: 1 };
+    await recordTurn({ sessionId: s.id, role: "user", text: "hmm", captureSettings: settings });
+    const loaded = await getSessionWithTurns(s.id);
+    expect(loaded.turns[0].captureSettings).toEqual(settings);
+  });
+
+  it("stores null capture settings when none was supplied", async () => {
+    const s = await startSession();
+    await recordTurn({ sessionId: s.id, role: "coach", text: "sure" });
+    const loaded = await getSessionWithTurns(s.id);
+    expect(loaded.turns[0].captureSettings).toBeNull();
+  });
+
+  it("survives one unreadable capture-settings row instead of failing the whole session read", async () => {
+    const s = await startSession();
+    const bad = await recordTurn({ sessionId: s.id, role: "user", text: "corrupt" });
+    await getPrisma().turn.update({ where: { id: bad.id }, data: { captureSettings: "{not json" } });
+    await recordTurn({ sessionId: s.id, role: "coach", text: "third" });
+
+    const loaded = await getSessionWithTurns(s.id);
+    expect(loaded.turns[0].captureSettings).toBeNull(); // the bad row degrades, alone
+    expect(loaded.turns[1].text).toBe("third"); // and the rows after it still arrive
+  });
+
   it("survives one unreadable row instead of failing the whole session read", async () => {
     const s = await startSession();
     await recordTurn({ sessionId: s.id, role: "user", text: "first", prosody: { total: 1, internal: 1, boundary: 0, unknown: 0 } });

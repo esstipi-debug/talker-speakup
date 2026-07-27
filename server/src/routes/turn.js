@@ -45,7 +45,7 @@ async function runTurn(utterance, history) {
 /**
  * POST /turn
  * body: { utterance: string, history?: { role: "coach"|"user", text: string }[],
- *         sessionId?: string, prosody?: object }
+ *         sessionId?: string, prosody?: object, captureSettings?: object }
  * resp: { coach_reply: string, xp: number, audio?: base64, audioFormat?: string,
  *         ttsProvider: string, sessionId: string|null }
  *
@@ -56,7 +56,7 @@ async function runTurn(utterance, history) {
  * A DB failure there never fails the request; it only costs the row.
  */
 router.post("/", async (req, res) => {
-  const { utterance, history, sessionId, prosody } = req.body ?? {};
+  const { utterance, history, sessionId, prosody, captureSettings } = req.body ?? {};
 
   if (typeof utterance !== "string" || !utterance.trim()) {
     return res.status(400).json({ error: 'Missing "utterance" (non-empty string).' });
@@ -66,7 +66,7 @@ router.post("/", async (req, res) => {
     const result = await runTurn(utterance.trim(), history);
     // Persistence must never break the loop: a DB failure costs us a row,
     // not the learner's turn.
-    const persistedId = await persistTurn({ sessionId, utterance: utterance.trim(), prosody, result });
+    const persistedId = await persistTurn({ sessionId, utterance: utterance.trim(), prosody, captureSettings, result });
     return res.json({ ...result, sessionId: persistedId });
   } catch (err) {
     console.error("[turn] brain error:", err);
@@ -77,12 +77,18 @@ router.post("/", async (req, res) => {
   }
 });
 
-async function persistTurn({ sessionId, utterance, prosody, result }) {
+async function persistTurn({ sessionId, utterance, prosody, captureSettings, result }) {
   let id = sessionId ?? null;
   let sessionUsable = false;
   try {
     if (!id) id = (await startSession()).id;
-    await recordTurn({ sessionId: id, role: "user", text: utterance, prosody: prosody ?? null });
+    await recordTurn({
+      sessionId: id,
+      role: "user",
+      text: utterance,
+      prosody: prosody ?? null,
+      captureSettings: captureSettings ?? null,
+    });
     sessionUsable = true; // a write to this session has now succeeded
     await recordTurn({ sessionId: id, role: "coach", text: result.coach_reply, xp: result.xp ?? null });
     return id;

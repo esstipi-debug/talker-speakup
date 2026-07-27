@@ -56,6 +56,14 @@ describe("POST /turn persistence", () => {
     expect(session.turns[1].prosody).toBeNull();
   });
 
+  it("stores the capture settings on the user turn only", async () => {
+    const settings = { sampleRate: 48000, echoCancellation: false, autoGainControl: false, channelCount: 1 };
+    const { body } = await turn({ utterance: "hmm well", captureSettings: settings });
+    const session = await getSessionWithTurns(body.sessionId);
+    expect(session.turns[0].captureSettings).toEqual(settings);
+    expect(session.turns[1].captureSettings).toBeNull();
+  });
+
   it("still answers when the session id does not exist — the loop never breaks on a DB miss", async () => {
     const { status, body } = await turn({ utterance: "hello", sessionId: "does-not-exist" });
     expect(status).toBe(200);

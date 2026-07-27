@@ -1,10 +1,10 @@
 /** Thin client for the SpeakUp server. Paths are proxied to :3001 by Vite. */
 
-export async function postTurn({ utterance, history, sessionId, prosody }) {
+export async function postTurn({ utterance, history, sessionId, prosody, captureSettings }) {
   const res = await fetch("/turn", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ utterance, history, sessionId, prosody }),
+    body: JSON.stringify({ utterance, history, sessionId, prosody, captureSettings }),
   });
 
   if (!res.ok) {
