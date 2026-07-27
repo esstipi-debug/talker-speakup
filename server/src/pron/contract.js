@@ -217,3 +217,120 @@ export function validateAssessInput({ text, mode, audioBytes } = {}) {
   }
   return { ok: true, value: { text: trimmed, mode: mode ?? DEFAULT_MODE } };
 }
+
+const OVERALL_KEYS = ["accuracy", "fluency", "completeness"];
+const PROSODY_NUMBER_KEYS = ["speechRateWpm", "articulationRateSyllPerSec", "pauseTotalSec"];
+const PROSODY_NULLABLE_KEYS = ["f0MinHz", "f0MaxHz", "f0RangeSemitones"];
+const PROSODY_KEYS = [...PROSODY_NUMBER_KEYS, "pauseCount", ...PROSODY_NULLABLE_KEYS];
+const WORD_KEYS = ["word", "start", "end", "accuracy", "phones"];
+const PHONE_KEYS = ["ipa", "score", "start", "end", "substituted"];
+
+function isScore(value) {
+  return Number.isInteger(value) && value >= 0 && value <= 100;
+}
+
+function isNonNegativeNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function fail(error) {
+  return { ok: false, error };
+}
+
+function unknownKey(object, allowed, path) {
+  const extra = Object.keys(object).find((key) => !allowed.includes(key));
+  return extra ? `${path} has unknown key "${extra}".` : null;
+}
+
+/**
+ * Structural gate on anything a provider hands back. Everything the JSON Schema
+ * in this file's header states, plus the three invariants a schema cannot say:
+ * `substituted` absent-not-null, `substituted !== ipa`, and no unknown keys.
+ *
+ * @param {unknown} report
+ * @returns {{ ok: true } | { ok: false, error: string }}
+ */
+export function validateReport(report) {
+  if (!report || typeof report !== "object") return fail("report is not an object.");
+  if (report.version !== REPORT_VERSION) {
+    return fail(`report.version must be ${REPORT_VERSION}.`);
+  }
+
+  const { overall, prosody, words } = report;
+
+  if (!overall || typeof overall !== "object") return fail("report.overall is missing.");
+  for (const key of OVERALL_KEYS) {
+    if (!isScore(overall[key])) return fail(`report.overall.${key} must be an integer 0-100.`);
+  }
+  const overallExtra = unknownKey(overall, OVERALL_KEYS, "report.overall");
+  if (overallExtra) return fail(overallExtra);
+
+  if (!prosody || typeof prosody !== "object") return fail("report.prosody is missing.");
+  for (const key of PROSODY_NUMBER_KEYS) {
+    if (!isNonNegativeNumber(prosody[key])) {
+      return fail(`report.prosody.${key} must be a number >= 0.`);
+    }
+  }
+  if (!Number.isInteger(prosody.pauseCount) || prosody.pauseCount < 0) {
+    return fail("report.prosody.pauseCount must be an integer >= 0.");
+  }
+  for (const key of PROSODY_NULLABLE_KEYS) {
+    if (prosody[key] !== null && !isNonNegativeNumber(prosody[key])) {
+      return fail(`report.prosody.${key} must be a number >= 0 or null.`);
+    }
+  }
+  const prosodyExtra = unknownKey(prosody, PROSODY_KEYS, "report.prosody");
+  if (prosodyExtra) return fail(prosodyExtra);
+
+  if (!Array.isArray(words) || words.length === 0) {
+    return fail("report.words must be a non-empty array.");
+  }
+
+  for (let i = 0; i < words.length; i += 1) {
+    const word = words[i];
+    const at = `report.words[${i}]`;
+    if (!word || typeof word !== "object") return fail(`${at} is not an object.`);
+    if (typeof word.word !== "string" || !word.word) {
+      return fail(`${at}.word must be a non-empty string.`);
+    }
+    if (!isNonNegativeNumber(word.start)) return fail(`${at}.start must be a number >= 0.`);
+    if (!isNonNegativeNumber(word.end) || word.end < word.start) {
+      return fail(`${at}.end must be a number >= start.`);
+    }
+    if (!isScore(word.accuracy)) return fail(`${at}.accuracy must be an integer 0-100.`);
+    const wordExtra = unknownKey(word, WORD_KEYS, at);
+    if (wordExtra) return fail(wordExtra);
+
+    if (!("phones" in word)) continue;
+    if (!Array.isArray(word.phones) || word.phones.length === 0) {
+      return fail(`${at}.phones must be a non-empty array.`);
+    }
+    for (let j = 0; j < word.phones.length; j += 1) {
+      const phone = word.phones[j];
+      const pAt = `${at}.phones[${j}]`;
+      if (!phone || typeof phone !== "object") return fail(`${pAt} is not an object.`);
+      if (typeof phone.ipa !== "string" || !phone.ipa) {
+        return fail(`${pAt}.ipa must be a non-empty string.`);
+      }
+      if (!isScore(phone.score)) return fail(`${pAt}.score must be an integer 0-100.`);
+      if (!isNonNegativeNumber(phone.start)) return fail(`${pAt}.start must be a number >= 0.`);
+      if (!isNonNegativeNumber(phone.end) || phone.end < phone.start) {
+        return fail(`${pAt}.end must be a number >= start.`);
+      }
+      if ("substituted" in phone) {
+        if (typeof phone.substituted !== "string" || !phone.substituted) {
+          return fail(
+            `${pAt}.substituted must be a non-empty string when present — omit the key entirely when the phone was produced as expected.`,
+          );
+        }
+        if (phone.substituted === phone.ipa) {
+          return fail(`${pAt}.substituted must differ from ipa.`);
+        }
+      }
+      const phoneExtra = unknownKey(phone, PHONE_KEYS, pAt);
+      if (phoneExtra) return fail(phoneExtra);
+    }
+  }
+
+  return { ok: true };
+}

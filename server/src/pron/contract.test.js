@@ -8,6 +8,7 @@ import {
   PRON_ERROR_CODES,
   clampScore,
   validateAssessInput,
+  validateReport,
 } from "./contract.js";
 
 describe("contract — constants", () => {
@@ -154,5 +155,132 @@ describe("contract — validateAssessInput", () => {
     const result = validateAssessInput({ ...ok, audioBytes: -1 });
     expect(result.ok).toBe(false);
     expect(result.code).toBe(PRON_ERROR_CODES.MISSING_AUDIO);
+  });
+});
+
+function validReport() {
+  return {
+    version: 1,
+    mode: "scripted",
+    model: "mock",
+    overall: { accuracy: 78, fluency: 84, completeness: 100 },
+    prosody: {
+      speechRateWpm: 132.5,
+      articulationRateSyllPerSec: 4.2,
+      pauseCount: 1,
+      pauseTotalSec: 0.31,
+      f0MinHz: null,
+      f0MaxHz: null,
+      f0RangeSemitones: null,
+    },
+    words: [
+      {
+        word: "sheep",
+        start: 0.42,
+        end: 0.81,
+        accuracy: 41,
+        phones: [
+          { ipa: "ʃ", score: 88, start: 0.42, end: 0.5 },
+          { ipa: "iː", score: 31, start: 0.5, end: 0.72, substituted: "ɪ" },
+          { ipa: "p", score: 79, start: 0.72, end: 0.81 },
+        ],
+      },
+    ],
+  };
+}
+
+describe("contract — validateReport", () => {
+  it("accepts the canonical scripted report", () => {
+    expect(validateReport(validReport())).toEqual({ ok: true });
+  });
+
+  it("accepts a word with no phones (the unscripted shape)", () => {
+    const report = validReport();
+    delete report.words[0].phones;
+    expect(validateReport(report)).toEqual({ ok: true });
+  });
+
+  it("rejects a wrong or missing version", () => {
+    expect(validateReport({ ...validReport(), version: 2 }).error).toContain("report.version");
+    expect(validateReport(null).ok).toBe(false);
+    expect(validateReport("nope").ok).toBe(false);
+  });
+
+  it("rejects non-integer or out-of-range overall scores, naming the path", () => {
+    const report = validReport();
+    report.overall.fluency = 84.5;
+    expect(validateReport(report).error).toBe("report.overall.fluency must be an integer 0-100.");
+    report.overall.fluency = 101;
+    expect(validateReport(report).error).toBe("report.overall.fluency must be an integer 0-100.");
+  });
+
+  it("requires all seven prosody keys with the declared types", () => {
+    const report = validReport();
+    delete report.prosody.pauseCount;
+    expect(validateReport(report).error).toBe("report.prosody.pauseCount must be an integer >= 0.");
+
+    const report2 = validReport();
+    delete report2.prosody.f0MaxHz;
+    expect(validateReport(report2).error).toBe("report.prosody.f0MaxHz must be a number >= 0 or null.");
+
+    const report3 = validReport();
+    report3.prosody.f0MaxHz = 220;
+    expect(validateReport(report3)).toEqual({ ok: true });
+  });
+
+  it("rejects unknown keys on overall, prosody, words and phones", () => {
+    const a = validReport();
+    a.overall.pronScore = 80;
+    expect(validateReport(a).error).toBe('report.overall has unknown key "pronScore".');
+
+    const b = validReport();
+    b.prosody.jitter = 0.1;
+    expect(validateReport(b).error).toBe('report.prosody has unknown key "jitter".');
+
+    const c = validReport();
+    c.words[0].errorType = "Mispronunciation";
+    expect(validateReport(c).error).toBe('report.words[0] has unknown key "errorType".');
+
+    const d = validReport();
+    d.words[0].phones[0].confidence = 0.9;
+    expect(validateReport(d).error).toBe('report.words[0].phones[0] has unknown key "confidence".');
+  });
+
+  it("rejects an empty words array and an empty phones array", () => {
+    const a = validReport();
+    a.words = [];
+    expect(validateReport(a).error).toBe("report.words must be a non-empty array.");
+
+    const b = validReport();
+    b.words[0].phones = [];
+    expect(validateReport(b).error).toBe("report.words[0].phones must be a non-empty array.");
+  });
+
+  it("rejects an end before its start", () => {
+    const a = validReport();
+    a.words[0].end = 0.1;
+    expect(validateReport(a).error).toBe("report.words[0].end must be a number >= start.");
+
+    const b = validReport();
+    b.words[0].phones[1].end = 0.4;
+    expect(validateReport(b).error).toBe("report.words[0].phones[1].end must be a number >= start.");
+  });
+
+  it("rejects substituted: null and substituted: '' — absence is the only way to say 'correct'", () => {
+    const a = validReport();
+    a.words[0].phones[0].substituted = null;
+    expect(validateReport(a).error).toContain("report.words[0].phones[0].substituted");
+
+    const b = validReport();
+    b.words[0].phones[0].substituted = "";
+    expect(validateReport(b).error).toContain("report.words[0].phones[0].substituted");
+  });
+
+  it("rejects a substitution equal to the expected phone", () => {
+    const report = validReport();
+    report.words[0].phones[1].substituted = "iː";
+    expect(validateReport(report).error).toBe(
+      "report.words[0].phones[1].substituted must differ from ipa.",
+    );
   });
 });
