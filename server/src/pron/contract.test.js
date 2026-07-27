@@ -226,6 +226,36 @@ describe("contract — validateReport", () => {
     const report3 = validReport();
     report3.prosody.f0MaxHz = 220;
     expect(validateReport(report3)).toEqual({ ok: true });
+
+    const report4 = validReport();
+    report4.prosody.speechRateWpm = -1;
+    expect(validateReport(report4).error).toBe(
+      "report.prosody.speechRateWpm must be a number >= 0.",
+    );
+
+    const report5 = validReport();
+    report5.prosody.articulationRateSyllPerSec = "fast";
+    expect(validateReport(report5).error).toBe(
+      "report.prosody.articulationRateSyllPerSec must be a number >= 0.",
+    );
+
+    const report6 = validReport();
+    delete report6.prosody.pauseTotalSec;
+    expect(validateReport(report6).error).toBe(
+      "report.prosody.pauseTotalSec must be a number >= 0.",
+    );
+
+    const report7 = validReport();
+    report7.prosody.f0MinHz = -5;
+    expect(validateReport(report7).error).toBe(
+      "report.prosody.f0MinHz must be a number >= 0 or null.",
+    );
+
+    const report8 = validReport();
+    report8.prosody.f0RangeSemitones = "wide";
+    expect(validateReport(report8).error).toBe(
+      "report.prosody.f0RangeSemitones must be a number >= 0 or null.",
+    );
   });
 
   it("rejects unknown keys on overall, prosody, words and phones", () => {
@@ -282,5 +312,123 @@ describe("contract — validateReport", () => {
     expect(validateReport(report).error).toBe(
       "report.words[0].phones[1].substituted must differ from ipa.",
     );
+  });
+
+  it("rejects report.overall when missing or not an object", () => {
+    const a = validReport();
+    delete a.overall;
+    expect(validateReport(a).error).toBe("report.overall is missing.");
+
+    const b = validReport();
+    b.overall = "nope";
+    expect(validateReport(b).error).toBe("report.overall is missing.");
+  });
+
+  it("rejects report.prosody when missing or not an object", () => {
+    const a = validReport();
+    delete a.prosody;
+    expect(validateReport(a).error).toBe("report.prosody is missing.");
+
+    const b = validReport();
+    b.prosody = 5;
+    expect(validateReport(b).error).toBe("report.prosody is missing.");
+  });
+
+  it("rejects a word entry that is missing or not an object", () => {
+    const a = validReport();
+    a.words[0] = null;
+    expect(validateReport(a).error).toBe("report.words[0] is not an object.");
+
+    const b = validReport();
+    b.words[0] = "sheep";
+    expect(validateReport(b).error).toBe("report.words[0] is not an object.");
+  });
+
+  it("rejects a word.word that is empty or not a string", () => {
+    const a = validReport();
+    a.words[0].word = "";
+    expect(validateReport(a).error).toBe("report.words[0].word must be a non-empty string.");
+
+    const b = validReport();
+    b.words[0].word = 7;
+    expect(validateReport(b).error).toBe("report.words[0].word must be a non-empty string.");
+  });
+
+  it("rejects a word.start that is negative or not a number", () => {
+    const a = validReport();
+    a.words[0].start = -0.1;
+    expect(validateReport(a).error).toBe("report.words[0].start must be a number >= 0.");
+
+    const b = validReport();
+    b.words[0].start = "0";
+    expect(validateReport(b).error).toBe("report.words[0].start must be a number >= 0.");
+  });
+
+  it("rejects a word.accuracy that is non-integer or out of range", () => {
+    const a = validReport();
+    a.words[0].accuracy = 100.5;
+    expect(validateReport(a).error).toBe("report.words[0].accuracy must be an integer 0-100.");
+
+    const b = validReport();
+    b.words[0].accuracy = -1;
+    expect(validateReport(b).error).toBe("report.words[0].accuracy must be an integer 0-100.");
+  });
+
+  it("rejects a phone entry that is missing or not an object", () => {
+    const a = validReport();
+    a.words[0].phones[0] = null;
+    expect(validateReport(a).error).toBe("report.words[0].phones[0] is not an object.");
+
+    const b = validReport();
+    b.words[0].phones[0] = 42;
+    expect(validateReport(b).error).toBe("report.words[0].phones[0] is not an object.");
+  });
+
+  it("rejects a phone.ipa that is empty or not a string", () => {
+    const a = validReport();
+    a.words[0].phones[0].ipa = "";
+    expect(validateReport(a).error).toBe(
+      "report.words[0].phones[0].ipa must be a non-empty string.",
+    );
+
+    const b = validReport();
+    b.words[0].phones[0].ipa = 5;
+    expect(validateReport(b).error).toBe(
+      "report.words[0].phones[0].ipa must be a non-empty string.",
+    );
+  });
+
+  it("rejects a phone.score that is non-integer or out of range", () => {
+    const a = validReport();
+    a.words[0].phones[0].score = 101;
+    expect(validateReport(a).error).toBe(
+      "report.words[0].phones[0].score must be an integer 0-100.",
+    );
+
+    const b = validReport();
+    b.words[0].phones[0].score = 12.3;
+    expect(validateReport(b).error).toBe(
+      "report.words[0].phones[0].score must be an integer 0-100.",
+    );
+  });
+
+  it("rejects a phone.start that is negative or not a number", () => {
+    const a = validReport();
+    a.words[0].phones[0].start = -0.01;
+    expect(validateReport(a).error).toBe(
+      "report.words[0].phones[0].start must be a number >= 0.",
+    );
+
+    const b = validReport();
+    b.words[0].phones[0].start = "0";
+    expect(validateReport(b).error).toBe(
+      "report.words[0].phones[0].start must be a number >= 0.",
+    );
+  });
+
+  it("accepts a phone whose end equals its start (zero duration)", () => {
+    const report = validReport();
+    report.words[0].phones[0].end = report.words[0].phones[0].start;
+    expect(validateReport(report)).toEqual({ ok: true });
   });
 });
