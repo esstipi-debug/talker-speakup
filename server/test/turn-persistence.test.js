@@ -61,4 +61,17 @@ describe("POST /turn persistence", () => {
     expect(status).toBe(200);
     expect(body.coach_reply).toBeTruthy();
   });
+
+  it("does not echo back a session id it could not write to", async () => {
+    // A stale id the client is still holding: every write to it fails, so
+    // handing it back would make every later turn fail the same way.
+    const { body } = await turn({ utterance: "hello", sessionId: "does-not-exist" });
+    expect(body.sessionId).toBeNull();
+  });
+
+  it("keeps the session id once a write to it has succeeded", async () => {
+    const first = await turn({ utterance: "one" });
+    const second = await turn({ utterance: "two", sessionId: first.body.sessionId });
+    expect(second.body.sessionId).toBe(first.body.sessionId);
+  });
 });
