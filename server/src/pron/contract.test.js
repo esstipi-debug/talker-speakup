@@ -469,4 +469,58 @@ describe("contract — stripPhones", () => {
     const source = stripPhones(validReport());
     expect(stripPhones(source)).toEqual(source);
   });
+
+  it("removes phones from every word in a multi-word report, including words with no phones key", () => {
+    const multiWordReport = {
+      version: 1,
+      mode: "scripted",
+      model: "mock",
+      overall: { accuracy: 78, fluency: 84, completeness: 100 },
+      prosody: {
+        speechRateWpm: 132.5,
+        articulationRateSyllPerSec: 4.2,
+        pauseCount: 1,
+        pauseTotalSec: 0.31,
+        f0MinHz: null,
+        f0MaxHz: null,
+        f0RangeSemitones: null,
+      },
+      words: [
+        {
+          word: "sheep",
+          start: 0.42,
+          end: 0.81,
+          accuracy: 41,
+          phones: [
+            { ipa: "ʃ", score: 88, start: 0.42, end: 0.5 },
+            { ipa: "iː", score: 31, start: 0.5, end: 0.72, substituted: "ɪ" },
+            { ipa: "p", score: 79, start: 0.72, end: 0.81 },
+          ],
+        },
+        {
+          word: "is",
+          start: 0.81,
+          end: 1.05,
+          accuracy: 92,
+          phones: [
+            { ipa: "ɪ", score: 95, start: 0.81, end: 0.95 },
+            { ipa: "z", score: 88, start: 0.95, end: 1.05 },
+          ],
+        },
+        {
+          word: "full",
+          start: 1.05,
+          end: 1.42,
+          accuracy: 75,
+        },
+      ],
+    };
+
+    const stripped = stripPhones(multiWordReport);
+    expect(stripped.words).toHaveLength(3);
+    expect(stripped.words.every((w) => !("phones" in w))).toBe(true);
+    expect(stripped.words[0].word).toBe("sheep");
+    expect(stripped.words[1].word).toBe("is");
+    expect(stripped.words[2].word).toBe("full");
+  });
 });
