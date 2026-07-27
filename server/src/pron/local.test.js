@@ -21,6 +21,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  delete process.env.PRON_URL;
+  delete process.env.PRON_TIMEOUT_MS;
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -111,6 +113,29 @@ describe("local — assess", () => {
     expect(error.message).toContain("model cold");
   });
 
+  it("falls back to PRON_UNAVAILABLE when a 400 body carries an unrecognised code", async () => {
+    fetch.mockResolvedValue(
+      response({ error: "boom", code: "constructor" }, { status: 400, statusText: "Bad Request" }),
+    );
+    const error = await new LocalPron().assess(AUDIO, { text: "hi" }).catch((err) => err);
+    expect(error.code).toBe("PRON_UNAVAILABLE");
+  });
+
+  it("tags a 200 response with malformed JSON as PRON_UNAVAILABLE instead of a bare SyntaxError", async () => {
+    fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      json: async () => {
+        throw new SyntaxError("Unexpected end of JSON input");
+      },
+      text: async () => "{truncated",
+    });
+    const error = await new LocalPron().assess(AUDIO, { text: "hi" }).catch((err) => err);
+    expect(error).toBeInstanceOf(SyntaxError);
+    expect(error.code).toBe("PRON_UNAVAILABLE");
+  });
+
   it("caps the echoed upstream detail at 200 characters", async () => {
     fetch.mockResolvedValue(response("x".repeat(5000), { status: 500, statusText: "Internal Server Error" }));
     const error = await new LocalPron().assess(AUDIO, { text: "hi" }).catch((err) => err);
@@ -160,5 +185,20 @@ describe("local — health", () => {
     await expect(new LocalPron().health()).rejects.toThrow(
       "Pron sidecar 500 Internal Server Error — down",
     );
+  });
+
+  it("tags a 200 response with malformed JSON as PRON_UNAVAILABLE instead of a bare SyntaxError", async () => {
+    fetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      json: async () => {
+        throw new SyntaxError("Unexpected end of JSON input");
+      },
+      text: async () => "{truncated",
+    });
+    const error = await new LocalPron().health().catch((err) => err);
+    expect(error).toBeInstanceOf(SyntaxError);
+    expect(error.code).toBe("PRON_UNAVAILABLE");
   });
 });

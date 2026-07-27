@@ -46,7 +46,14 @@ export class LocalPron {
         err.code = PRON_ERROR_CODES.PRON_UNAVAILABLE;
         throw err;
       }
-      if (res.ok) return await res.json();
+      if (res.ok) {
+        try {
+          return await res.json();
+        } catch (err) {
+          err.code = PRON_ERROR_CODES.PRON_UNAVAILABLE;
+          throw err;
+        }
+      }
       throw await this._toTypedError(res);
     } finally {
       clearTimeout(timer);
@@ -67,7 +74,12 @@ export class LocalPron {
           `Pron sidecar ${res.status} ${res.statusText} — ${detail.slice(0, DETAIL_CAP)}`,
         );
       }
-      return await res.json();
+      try {
+        return await res.json();
+      } catch (err) {
+        err.code = PRON_ERROR_CODES.PRON_UNAVAILABLE;
+        throw err;
+      }
     } finally {
       clearTimeout(timer);
     }
@@ -87,7 +99,7 @@ export class LocalPron {
         body = null;
       }
       const code = body?.code;
-      if (code && PRON_ERROR_CODES[code]) {
+      if (code && Object.hasOwn(PRON_ERROR_CODES, code)) {
         const err = new Error(body.error || `Pron sidecar ${res.status} ${res.statusText}`);
         err.code = code;
         return err;
