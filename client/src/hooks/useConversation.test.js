@@ -38,6 +38,16 @@ vi.mock("../lib/speech.js", async () => {
     },
   };
 });
+vi.mock("../lib/micStream.js", () => ({
+  getMicStream: vi.fn(async () => {}),
+  releaseMicStream: vi.fn(),
+  micNowMs: vi.fn(() => 0),
+  resetFrames: vi.fn(),
+  getFrames: vi.fn(() => new Float32Array(0)),
+  getHopMs: vi.fn(() => 10),
+  getCaptureSettings: vi.fn(() => null),
+  isMicOpen: vi.fn(() => true),
+}));
 
 import { postTurn, getHealth } from "../lib/api.js";
 import { playAudio, speak, stopSpeaking } from "../lib/speech.js";
@@ -501,5 +511,72 @@ describe("useConversation — speech machine", () => {
     expect(result.current.error).toMatch(/didn't catch that/i);
     act(() => result.current.clearError());
     expect(result.current.error).toBeNull();
+  });
+});
+
+describe("useConversation — pause profile", () => {
+  async function mountedProsody() {
+    const utils = renderHook(() => useConversation());
+    await waitFor(() => expect(utils.result.current.providers.tts).toBe("kokoro"));
+    return utils;
+  }
+
+  /** [durationMs, dB] segments at the 10ms hop getHopMs is mocked to report. */
+  function buildFrames(segments) {
+    const out = [];
+    for (const [ms, db] of segments) for (let i = 0; i < ms / 10; i += 1) out.push(db);
+    return Float32Array.from(out);
+  }
+
+  let mic;
+
+  beforeEach(async () => {
+    mic = await import("../lib/micStream.js");
+    // The module mock persists across tests; the top-level beforeEach doesn't know about it.
+    mic.getMicStream.mockClear();
+    mic.resetFrames.mockClear();
+    mic.getFrames.mockReturnValue(new Float32Array(0));
+    mic.getHopMs.mockReturnValue(10);
+    mic.micNowMs.mockReturnValue(0);
+  });
+
+  it("opens capture and clears the frame buffer when listening starts", async () => {
+    const { result } = await mountedProsody();
+    await act(async () => { result.current.startListening(); });
+    expect(mic.getMicStream).toHaveBeenCalled();
+    expect(mic.resetFrames).toHaveBeenCalled();
+  });
+
+  it("stays silent when the turn had fewer than three mid-phrase breaks", async () => {
+    // 1s speech / 400ms silence / 1s speech -> one pause, and with the only
+    // finalization at t=0 it classifies as trailing-unknown, not internal.
+    mic.getFrames.mockReturnValue(buildFrames([[1000, -20], [400, -70], [1000, -20]]));
+    const { result } = await mountedProsody();
+    await act(async () => { result.current.startListening(); });
+    act(() => recHandlers.onResult("hello there"));
+    await act(async () => { result.current.stopListening(); });
+    expect(result.current.pauseNote).toBeNull();
+  });
+
+  it("surfaces one sentence once three mid-phrase breaks are detected", async () => {
+    mic.getFrames.mockReturnValue(
+      buildFrames([[500, -20], [300, -70], [500, -20], [300, -70], [500, -20], [300, -70], [500, -20]]),
+    );
+    let t = 0;
+    mic.micNowMs.mockImplementation(() => (t += 5000)); // finalizations land after every pause
+    const { result } = await mountedProsody();
+    await act(async () => { result.current.startListening(); });
+    act(() => recHandlers.onResult("I think"));
+    act(() => recHandlers.onResult("that we should go"));
+    await act(async () => { result.current.stopListening(); });
+    expect(result.current.pauseNote).toMatch(/broke mid-phrase 3/);
+  });
+
+  it("does not clear the frame buffer when the recognizer auto-restarts mid-turn", async () => {
+    const { result } = await mountedProsody();
+    await act(async () => { result.current.startListening(); });
+    mic.resetFrames.mockClear();
+    await act(async () => { recHandlers.onEnd(); }); // silence self-termination -> restart
+    expect(mic.resetFrames).not.toHaveBeenCalled();
   });
 });

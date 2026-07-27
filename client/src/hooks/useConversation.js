@@ -8,6 +8,10 @@ import {
   stopSpeaking,
   warmUpVoices,
 } from "../lib/speech.js";
+import { getMicStream, micNowMs, resetFrames, getFrames, getHopMs } from "../lib/micStream.js";
+import { detectPauses } from "../lib/prosody/pauses.js";
+import { classifyPauses, summarise } from "../lib/prosody/placement.js";
+import { pauseSentence } from "../lib/prosody/summary.js";
 
 const GREETING =
   "Hi! I'm your SpeakUp coach. Tap the mic and tell me about your day — let's practice some English.";
@@ -30,6 +34,9 @@ export function useConversation() {
   const [error, setError] = useState(null);
   const [providers, setProviders] = useState({ brain: null, tts: null, stt: null });
   const [ttsFallbackActive, setTtsFallbackActive] = useState(false);
+  const [pauseNote, setPauseNote] = useState(null);
+  const [sessionPauseCounts, setSessionPauseCounts] = useState({ total: 0, internal: 0, boundary: 0, unknown: 0 });
+  const finalizationsRef = useRef([]);
 
   const recognizerRef = useRef(null);
   const userStoppedRef = useRef(false);
@@ -117,7 +124,26 @@ export function useConversation() {
   }
 
   // ---------------- speech capture ----------------
+  /**
+   * Runs once at end of turn, on the main thread, over the buffered contour.
+   * It cannot stream: the silence floor is a global statistic over the whole
+   * utterance (spec §5.2, M1).
+   */
+  function computePauseProfile() {
+    const pauses = detectPauses(getFrames(), { hopMs: getHopMs() });
+    const classified = classifyPauses(pauses, finalizationsRef.current);
+    const counts = summarise(classified);
+    setSessionPauseCounts((prev) => ({
+      total: prev.total + counts.total,
+      internal: prev.internal + counts.internal,
+      boundary: prev.boundary + counts.boundary,
+      unknown: prev.unknown + counts.unknown,
+    }));
+    setPauseNote(pauseSentence(counts));
+  }
+
   function finishListening(announceEmpty) {
+    computePauseProfile();
     const combined = `${draftRef.current} ${interimRef.current}`.trim();
     setInterim("");
     if (combined) {
@@ -161,6 +187,7 @@ export function useConversation() {
     // Deferred to the next tick: restarting the same recognizer synchronously
     // inside its own onend can throw InvalidStateError in Chrome mid-teardown.
     emptyRestartsRef.current += 1;
+    finalizationsRef.current.push({ tMs: micNowMs(), text: "" });
     setTimeout(() => {
       if (statusRef.current !== "listening") return; // a stop()/cancel() may have raced the deferred restart
       try {
@@ -181,10 +208,15 @@ export function useConversation() {
     fatalRef.current = false;
     emptyRestartsRef.current = 0;
     listenStartRef.current = Date.now();
+    finalizationsRef.current = [];
+    setPauseNote(null);
+    resetFrames();
+    getMicStream().catch(() => { /* capture is optional; the turn still works */ });
     const rec = createRecognizer({
       onStart: () => setStatus("listening"),
       onResult: (chunk) => {
         emptyRestartsRef.current = 0;
+        finalizationsRef.current.push({ tMs: micNowMs(), text: chunk });
         setDraft((d) => `${d} ${chunk}`.trim());
       },
       onInterim: (tail) => setInterim(tail),
@@ -277,6 +309,8 @@ export function useConversation() {
     error,
     providers,
     ttsFallbackActive,
+    pauseNote,
+    sessionPauseCounts,
     sttSupported: isSTTSupported(),
     turns: messages.filter((m) => m.role === "user").length,
     startListening,
