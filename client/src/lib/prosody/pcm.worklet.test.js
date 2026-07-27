@@ -65,4 +65,34 @@ describe("pcm.worklet", () => {
     const proc = await loadProcessor({ batchHops: 1 });
     expect(() => proc.process([[]], [[new Float32Array(128)]], {})).not.toThrow();
   });
+
+  // The ring is the only part of this file with non-obvious index arithmetic,
+  // and *.worklet.js is excluded from coverage instrumentation — these two
+  // tests are the only regression net it will ever have.
+  it("returns the ring in chronological order once it has wrapped", async () => {
+    const proc = await loadProcessor({ batchHops: 1, ringSeconds: (128 * 3) / 48000 }); // exactly 3 quanta
+    pump(proc, 1, 0.1);
+    pump(proc, 1, 0.2);
+    pump(proc, 1, 0.3);
+    pump(proc, 1, 0.4); // overwrites the 0.1 quantum
+
+    proc.port.onmessage({ data: { type: "dumpRing" } });
+
+    const ring = proc.port.messages.find((m) => m.type === "ring");
+    expect(ring.pcm).toHaveLength(384);
+    expect(ring.pcm[0]).toBeCloseTo(0.2, 5); // oldest surviving sample first
+    expect(ring.pcm[128]).toBeCloseTo(0.3, 5);
+    expect(ring.pcm[383]).toBeCloseTo(0.4, 5); // newest sample last
+    expect(ring.sampleRate).toBe(48000);
+  });
+
+  it("returns only what has been written before the ring wraps", async () => {
+    const proc = await loadProcessor({ batchHops: 1, ringSeconds: (128 * 3) / 48000 });
+    pump(proc, 2, 0.5);
+
+    proc.port.onmessage({ data: { type: "dumpRing" } });
+
+    const ring = proc.port.messages.find((m) => m.type === "ring");
+    expect(ring.pcm).toHaveLength(256); // two quanta, not the full 384
+  });
 });

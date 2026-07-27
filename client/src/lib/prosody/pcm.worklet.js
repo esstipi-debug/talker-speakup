@@ -8,7 +8,10 @@
  * interpretation.
  */
 
-const DEFAULTS = { hopSize: 128, batchHops: 32, ringSeconds: 15 };
+// No hopSize here: the hop IS the render quantum the browser hands process(),
+// so the worklet never needs telling. Only the main thread needs the number,
+// to turn a frame index back into a time.
+const DEFAULTS = { batchHops: 32, ringSeconds: 15 };
 
 class PcmProcessor extends AudioWorkletProcessor {
   constructor(options) {
