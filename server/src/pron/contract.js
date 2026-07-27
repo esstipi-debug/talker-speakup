@@ -334,3 +334,22 @@ export function validateReport(report) {
 
   return { ok: true };
 }
+
+/**
+ * Enforces design §3 — unscripted mode never carries phonemes. Returns a new
+ * report; the input is never mutated, because the same report object may be
+ * logged or reused by the caller.
+ *
+ * @param {PronunciationReport} report
+ * @returns {PronunciationReport}
+ */
+export function stripPhones(report) {
+  return {
+    ...report,
+    words: report.words.map((word) => {
+      const copy = { ...word };
+      delete copy.phones;
+      return copy;
+    }),
+  };
+}

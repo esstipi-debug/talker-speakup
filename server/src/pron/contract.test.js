@@ -9,6 +9,7 @@ import {
   clampScore,
   validateAssessInput,
   validateReport,
+  stripPhones,
 } from "./contract.js";
 
 describe("contract — constants", () => {
@@ -430,5 +431,42 @@ describe("contract — validateReport", () => {
     const report = validReport();
     report.words[0].phones[0].end = report.words[0].phones[0].start;
     expect(validateReport(report)).toEqual({ ok: true });
+  });
+});
+
+describe("contract — stripPhones", () => {
+  it("removes phones from every word", () => {
+    const stripped = stripPhones(validReport());
+    expect(stripped.words).toHaveLength(1);
+    for (const word of stripped.words) {
+      expect("phones" in word).toBe(false);
+      expect(word.word).toBe("sheep");
+      expect(word.accuracy).toBe(41);
+    }
+  });
+
+  it("never mutates the input report", () => {
+    const original = validReport();
+    const before = JSON.stringify(original);
+    stripPhones(original);
+    expect(JSON.stringify(original)).toBe(before);
+    expect(original.words[0].phones).toHaveLength(3);
+  });
+
+  it("returns new objects, not shared references", () => {
+    const original = validReport();
+    const stripped = stripPhones(original);
+    expect(stripped).not.toBe(original);
+    expect(stripped.words).not.toBe(original.words);
+    expect(stripped.words[0]).not.toBe(original.words[0]);
+  });
+
+  it("produces a report that still validates", () => {
+    expect(validateReport(stripPhones(validReport()))).toEqual({ ok: true });
+  });
+
+  it("is a no-op on a report whose words already carry no phones", () => {
+    const source = stripPhones(validReport());
+    expect(stripPhones(source)).toEqual(source);
   });
 });
