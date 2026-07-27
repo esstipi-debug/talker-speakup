@@ -17,6 +17,7 @@ describe("GET /pron/prompts — the curated set", () => {
     const res = await request(createApp()).get("/pron/prompts");
     expect(res.status).toBe(200);
     expect(res.body.version).toBe(1);
+    expect(res.body.updated).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(res.body.focuses).toEqual([
       "ih-iy",
       "ae",
@@ -42,6 +43,15 @@ describe("GET /pron/prompts — the curated set", () => {
     const res = await request(createApp()).get("/pron/prompts?focus=");
     expect(res.status).toBe(200);
     expect(res.body.prompts.length).toBeGreaterThanOrEqual(21);
+  });
+
+  it("rejects whitespace-only focus with UNKNOWN_FOCUS", async () => {
+    const res = await request(createApp()).get("/pron/prompts?focus=%20");
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({
+      error: 'Unknown "focus". Valid values: ih-iy, ae, schwa, v-b, dzh, s-cluster, ed-ending.',
+      code: "UNKNOWN_FOCUS",
+    });
   });
 
   it("400s an unknown focus with a typed code and the valid values", async () => {

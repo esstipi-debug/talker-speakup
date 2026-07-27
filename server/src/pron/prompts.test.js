@@ -47,6 +47,15 @@ describe("prompts — filtering", () => {
     });
   });
 
+  it("rejects whitespace-only focus as unknown", () => {
+    expect(listPrompts({ focus: " " })).toEqual({
+      ok: false,
+      status: 400,
+      code: "UNKNOWN_FOCUS",
+      error: 'Unknown "focus". Valid values: ih-iy, ae, schwa, v-b, dzh, s-cluster, ed-ending.',
+    });
+  });
+
   it("rejects a repeated query param (express hands over an array)", () => {
     expect(listPrompts({ focus: ["ae", "schwa"] }).code).toBe("UNKNOWN_FOCUS");
   });
