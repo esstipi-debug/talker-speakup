@@ -26,6 +26,10 @@ model Turn {
   fluency    Int?
   confidence Int?
   xp         Int?
+  // JSON-encoded pause profile. String rather than Json so the SQLite
+  // connector's Json capability is not a migrate-time risk; the volume here is
+  // a handful of counts per turn. Slice 4 decides for PronAttempt with data.
+  prosody    String?
   createdAt  DateTime @default(now())
 }
 
