@@ -183,4 +183,16 @@ describe("micStream", () => {
     stubCurrentTime = 302;
     expect(micNowMs()).toBe(2000); // two seconds into THIS turn, not the session
   });
+
+  it("starts the epoch at zero when the buffer is reset before the mic is open", async () => {
+    // startListening() calls resetFrames() before getMicStream() — this is the
+    // ordering every session's first turn takes.
+    const { getMicStream, micNowMs, resetFrames } = await import("./micStream.js");
+    resetFrames();
+    expect(micNowMs()).toBe(0);
+
+    await getMicStream();
+    stubCurrentTime = 4;
+    expect(micNowMs()).toBe(4000); // a fresh context starts at 0, so no offset is lost
+  });
 });
