@@ -751,7 +751,7 @@ git commit -m "feat(prosody): deterministic pause-profile coach copy"
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: a processor registered as `"pcm-processor"` that posts `{ type: "frames", rmsDb: Float32Array }` batches. `HOP_SIZE`, `BATCH_HOPS` and `RING_SECONDS` are read from `processorOptions`.
+- Produces: a processor registered as `"pcm-processor"` that posts `{ type: "frames", rmsDb: Float32Array }` batches, and answers `{ type: "dumpRing" }` with `{ type: "ring", pcm, sampleRate }`. `BATCH_HOPS` and `RING_SECONDS` are read from `processorOptions`; **the hop is never configured** — it is the render quantum the browser hands `process()`.
 
 **Why zero imports (deviation D-a):** Vite serves a worklet in dev as an ES module with static imports, but emits a self-contained IIFE on build — a worklet that works in `vite build` can fail in `vite dev`. A processor with no imports at all cannot hit that. It also keeps the audio thread doing nothing but arithmetic: no nuclei, no counts, no rates. Spec §4.1.
 
@@ -827,6 +827,34 @@ describe("pcm.worklet", () => {
     const proc = await loadProcessor({ batchHops: 1 });
     expect(() => proc.process([[]], [[new Float32Array(128)]], {})).not.toThrow();
   });
+
+  // The ring is the only part of this file with non-obvious index arithmetic,
+  // and *.worklet.js is excluded from coverage instrumentation — these two
+  // tests are the only regression net it will ever have.
+  it("returns the ring in chronological order once it has wrapped", async () => {
+    const proc = await loadProcessor({ batchHops: 1, ringSeconds: (128 * 3) / 48000 }); // exactly 3 quanta
+    pump(proc, 1, 0.1);
+    pump(proc, 1, 0.2);
+    pump(proc, 1, 0.3);
+    pump(proc, 1, 0.4); // overwrites the 0.1 quantum
+    proc.port.onmessage({ data: { type: "dumpRing" } });
+
+    const ring = proc.port.messages.find((m) => m.type === "ring");
+    expect(ring.pcm).toHaveLength(384);
+    expect(ring.pcm[0]).toBeCloseTo(0.2, 5); // oldest surviving sample first
+    expect(ring.pcm[128]).toBeCloseTo(0.3, 5);
+    expect(ring.pcm[383]).toBeCloseTo(0.4, 5); // newest sample last
+    expect(ring.sampleRate).toBe(48000);
+  });
+
+  it("returns only what has been written before the ring wraps", async () => {
+    const proc = await loadProcessor({ batchHops: 1, ringSeconds: (128 * 3) / 48000 });
+    pump(proc, 2, 0.5);
+    proc.port.onmessage({ data: { type: "dumpRing" } });
+
+    const ring = proc.port.messages.find((m) => m.type === "ring");
+    expect(ring.pcm).toHaveLength(256); // two quanta, not the full 384
+  });
 });
 ```
 
@@ -850,7 +878,10 @@ Create `client/src/lib/prosody/pcm.worklet.js`:
  * interpretation.
  */
 
-const DEFAULTS = { hopSize: 128, batchHops: 32, ringSeconds: 15 };
+// No hopSize here: the hop IS the render quantum the browser hands process(),
+// so the worklet never needs telling. Only the main thread needs the number,
+// to turn a frame index back into a time.
+const DEFAULTS = { batchHops: 32, ringSeconds: 15 };
 
 class PcmProcessor extends AudioWorkletProcessor {
   constructor(options) {
@@ -1109,7 +1140,10 @@ export async function getMicStream() {
     await ctx.audioWorklet.addModule(new URL("./prosody/pcm.worklet.js", import.meta.url));
 
     const node = new AudioWorkletNode(ctx, "pcm-processor", {
-      processorOptions: { hopSize: HOP_SIZE, batchHops: BATCH_HOPS, ringSeconds: RING_SECONDS },
+      // HOP_SIZE is deliberately not passed: the worklet's hop is whatever
+      // quantum the browser hands it. This module keeps the number only to
+      // convert a frame index back into milliseconds.
+      processorOptions: { batchHops: BATCH_HOPS, ringSeconds: RING_SECONDS },
     });
     node.port.onmessage = (e) => {
       if (e.data?.type === "frames") {
