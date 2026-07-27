@@ -3,6 +3,7 @@ import multer from "multer";
 import { getBrain } from "../brain/index.js";
 import { getTTS, currentTTSProvider } from "../tts/index.js";
 import { getSTT } from "../stt/index.js";
+import { startSession, recordTurn } from "../repo/session.js";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
@@ -43,14 +44,19 @@ async function runTurn(utterance, history) {
 
 /**
  * POST /turn
- * body: { utterance: string, history?: { role: "coach"|"user", text: string }[] }
- * resp: { coach_reply: string, xp: number, audio?: base64, audioFormat?: string, ttsProvider: string }
+ * body: { utterance: string, history?: { role: "coach"|"user", text: string }[],
+ *         sessionId?: string, prosody?: object }
+ * resp: { coach_reply: string, xp: number, audio?: base64, audioFormat?: string,
+ *         ttsProvider: string, sessionId: string|null }
  *
  * M1 scope: the brain returns the next coach line + basic XP.
  * Structured feedback (corrections, fluency, confidence) arrives in M2.
+ *
+ * The turn is persisted (Session/Turn) as a side effect — see persistTurn below.
+ * A DB failure there never fails the request; it only costs the row.
  */
 router.post("/", async (req, res) => {
-  const { utterance, history } = req.body ?? {};
+  const { utterance, history, sessionId, prosody } = req.body ?? {};
 
   if (typeof utterance !== "string" || !utterance.trim()) {
     return res.status(400).json({ error: 'Missing "utterance" (non-empty string).' });
@@ -58,7 +64,10 @@ router.post("/", async (req, res) => {
 
   try {
     const result = await runTurn(utterance.trim(), history);
-    return res.json(result);
+    // Persistence must never break the loop: a DB failure costs us a row,
+    // not the learner's turn.
+    const persistedId = await persistTurn({ sessionId, utterance: utterance.trim(), prosody, result });
+    return res.json({ ...result, sessionId: persistedId });
   } catch (err) {
     console.error("[turn] brain error:", err);
     return res.status(502).json({
@@ -67,6 +76,19 @@ router.post("/", async (req, res) => {
     });
   }
 });
+
+async function persistTurn({ sessionId, utterance, prosody, result }) {
+  try {
+    let id = sessionId;
+    if (!id) id = (await startSession()).id;
+    await recordTurn({ sessionId: id, role: "user", text: utterance, prosody: prosody ?? null });
+    await recordTurn({ sessionId: id, role: "coach", text: result.coach_reply, xp: result.xp ?? null });
+    return id;
+  } catch (dbErr) {
+    console.warn("[turn] persistence failed, continuing:", dbErr.message);
+    return sessionId ?? null;
+  }
+}
 
 /**
  * POST /turn/audio

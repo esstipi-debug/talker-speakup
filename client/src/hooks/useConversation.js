@@ -45,6 +45,8 @@ export function useConversation() {
   const emptyRestartsRef = useRef(0);
   const currentAudioRef = useRef(null);
   const speakTimerRef = useRef(null);
+  const sessionIdRef = useRef(null);
+  const lastTurnProsodyRef = useRef(null);
 
   const statusRef = useRef("idle");
   const draftRef = useRef("");
@@ -104,10 +106,14 @@ export function useConversation() {
     setMessages((prev) => [...prev, userMsg]);
     setStatus("thinking");
     try {
-      const { coach_reply, xp, audio, audioFormat } = await postTurn({
+      const { coach_reply, xp, audio, audioFormat, sessionId } = await postTurn({
         utterance,
         history: [...historyBefore, userMsg],
+        sessionId: sessionIdRef.current,
+        prosody: lastTurnProsodyRef.current,
       });
+      if (sessionId) sessionIdRef.current = sessionId;
+      lastTurnProsodyRef.current = null;
       setMessages((prev) => [...prev, { role: "coach", text: coach_reply, audio, audioFormat }]);
       if (typeof xp === "number") setTotalXp((v) => v + xp);
 
@@ -139,6 +145,7 @@ export function useConversation() {
       boundary: prev.boundary + counts.boundary,
       unknown: prev.unknown + counts.unknown,
     }));
+    lastTurnProsodyRef.current = counts;
     setPauseNote(pauseSentence(counts));
   }
 
