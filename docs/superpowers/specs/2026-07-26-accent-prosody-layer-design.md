@@ -69,9 +69,9 @@ A learner with C1–C2 ambitions can, in ~7 minutes a day, practise English rhyt
 
 ### 3.1 Why the free-turn snapshot was cut
 
-The original design put stress dots under every conversational turn, computed in-browser. Research killed it:
+*(If the question on your mind is "does this actually catch mispronunciations", skip to §3.2.)*
 
-*(Read §3.2 first if the question on your mind is "does this actually catch mispronunciations".)*
+The original design put stress dots under every conversational turn, computed in-browser. Research killed it:
 
 - The energy-envelope syllable-nuclei detector **misses unstressed syllables**, and misses them *harder* the more syllable-timed the speech is. On an L1-Spanish speaker the metric can move **opposite to the truth**.
 - De Jong & Wempe (2009) is **not streamable** — its threshold is a global statistic over the whole file.
@@ -232,25 +232,13 @@ Native Orkney English and Welsh Valleys English both score **53** on VarcoV; L1-
 
 ## 6. Curriculum
 
-Static JSON committed at build time. LLM-drafted, human-passed (D7: the LLM proposes sentences, never phonetics — ARPAbet is resolved from the MFA dictionary at seed time, so OOV is impossible by construction).
+Static JSON committed at build time. LLM-drafted, human-passed (D7: the LLM proposes sentences, never phonetics). For **curriculum units** ARPAbet is resolved from the MFA dictionary at seed time, so OOV is impossible by construction. Ad-hoc echo lines (§7.3) are the one path that can meet an unknown word, and they handle it by declining the offer.
 
 | Set | Count | Role |
 |---|---|---|
 | **PROBE** | 6 | Fixed. Re-read weekly. The **only** units whose `rhythmIndex` is ever stored or plotted |
 | **PRACTICE** | 20 | `rhythmIndex: null`. Free to rotate. Weighted toward function-word density |
 | **Minimal pairs** | 60 | Generated from `CUNY-CL/wikipron` (Apache-2.0), human-passed. **Only if K4 passes** — do not author them before K4 resolves |
-
-### 6.2 The stress lexicon
-
-A build-time asset, `server/src/curriculum/stress-lexicon.json`, derived from the MFA dictionary: `word → { syllables, stressIndex }`. Pruned to the curriculum plus the most frequent ~20k words (~300 KB); the full 199,858 entries are available if size proves not to matter.
-
-It exists because three things need stress data **without the sidecar running**:
-
-1. **Echo eligibility** — a coach line is offerable iff every word resolves. If any word is missing, the offer is simply not made. This replaces the curated echo whitelist (D10) and is what widens scoring from a fixed set to most of what the coach actually says.
-2. **The `da-DA-da-da-DA` notation and the bolded model sentence** — the whole model step must render when the scorer is offline.
-3. **M-LEX's expected stress index.**
-
-Two constraints. **Nucleus annotation is not derivable** — M4 therefore runs only on the annotated PROBE/PRACTICE sets, never on ad-hoc echo lines, which get M3, M3-ext and M-LEX only. And the lexicon and the sidecar must be generated from the **same dictionary version**, or the expected stress index and the phone tier can disagree; pin it and assert the version at startup.
 
 **Deaccenting** enters as curriculum *shape*, not a new metric: two-sentence pairs where sentence 2 repeats a noun from sentence 1; apply M4's estimator to the known-given word with target = **not** max prominence. Binary, abstains when M4 abstains, free.
 
@@ -265,6 +253,18 @@ Two-tier split is **mandatory**. A naive frequency sort puts dark /ɫ/ (84.9% er
 **POLISH:** aspiration · /ɜː/ NURSE · dark /ɫ/ · sC-prothesis ("eSpain"). Frame these as *polish*, never "people can't understand you".
 
 **Cognate lexical stress seeds:** COMfortable/conforTAble · INteresting/intereSANte · ADmirable/admiRAble · CAtegory/categoRÍa · CHOcolate/chocoLAte · CApitalism/capitaLISmo · biOLogy/bioloGÍa. Regenerate the full list from a dictionary before shipping — Spanish stress is orthographically deterministic. *"hotel" is invalid: both languages stress the final syllable.*
+
+### 6.2 The stress lexicon
+
+A build-time asset, `server/src/curriculum/stress-lexicon.json`, derived from the MFA dictionary: `word → { syllables, stressIndex }`. Pruned to the curriculum plus the most frequent ~20k words (~300 KB); the full 199,858 entries are available if size proves not to matter.
+
+It exists because three things need stress data **without the sidecar running**:
+
+1. **Echo eligibility** — a coach line is offerable iff every word resolves. If any word is missing, the offer is simply not made. This replaces the curated echo whitelist (D10) and is what widens scoring from a fixed set to most of what the coach actually says.
+2. **The `da-DA-da-da-DA` notation and the bolded model sentence** — the whole model step must render when the scorer is offline.
+3. **M-LEX's expected stress index.**
+
+Two constraints. **Nucleus annotation is not derivable** — M4 therefore runs only on the annotated PROBE/PRACTICE sets, never on ad-hoc echo lines, which get M3, M3-ext and M-LEX only. And the lexicon and the sidecar must be generated from the **same dictionary version**, or the expected stress index and the phone tier can disagree; pin it and assert the version at startup.
 
 ---
 
@@ -284,7 +284,7 @@ Two-tier split is **mandatory**. A naive frequency sort puts dark /ɫ/ (84.9% er
 
 > *"Listen for the shape: two beats, not five. da-DA-da-da-DA."*
 
-**2 · ATTEMPT.** Record. `GymAttempt` row written **before** the sidecar is called.
+**2 · ATTEMPT.** Record. `PronAttempt` row written **before** the sidecar is called.
 
 **3 · FEEDBACK.** Duration ribbon (B) — target above (seed-time alignment of the Kokoro render), learner below, one shared time axis, **word granularity by default**. Below it, **one imperative sentence** from a deterministic template table, derived from the largest deviation only (cap duplicates, sort descending, drop the smallest — RhythmTA's own algorithm). Beside it, the hum A/B.
 
@@ -373,10 +373,11 @@ Slice 2 creates the persistence layer that does not exist today: `server/src/db.
 ### 9.1 Schema additions
 
 ```prisma
-model GymAttempt {
+// Holds BOTH Gym and echo attempts — hence PronAttempt, not GymAttempt.
+model PronAttempt {
   id              String   @id @default(cuid())
   createdAt       DateTime @default(now())
-  turnId          String?          // null for Gym attempts
+  turnId          String?          // set for echo attempts, null for Gym
   unitId          String?
   mode            String           // "gym" | "echo"
   source          String           // "local" | "none"
@@ -400,7 +401,7 @@ model GymAttempt {
 
 ### 9.3 XP
 
-**Flat rate, never scaled by a score.** 15 XP per completed scored attempt, +10 when a *binary* check passed (`nuclearHit === true`, or minimal-pair `'correct'`), 0 when the sidecar was down. Computed server-side in `server/src/pronunciation/scoring.js`. The existing `basicXp()` stays byte-identical, and the existing `Turn.fluency`/`Turn.confidence` Ints are untouched — M7's floats live in `GymAttempt.metrics`.
+**Flat rate, never scaled by a score.** 15 XP per completed scored attempt, +10 when a *binary* check passed (`nuclearHit === true`, or minimal-pair `'correct'`), 0 when the sidecar was down. Computed server-side in `server/src/pronunciation/scoring.js`. The existing `basicXp()` stays byte-identical, and the existing `Turn.fluency`/`Turn.confidence` Ints are untouched — M7's floats live in `PronAttempt.metrics`.
 
 A reward curve built on a number this spec itself calls untrustworthy would train the learner to optimise noise.
 
@@ -464,7 +465,7 @@ Each has its descope clause written **in advance**, so the decision is arithmeti
 |---|---|---|---|
 | **K2** | **Windows audio.** Constraints nested under `audio:{}`; read back `getSettings()`; record a fixed-amplitude tone at two distances and check the RMS ratio is preserved. **Run twice** — recognizer stopped, then active — and compare. (A `getSettings()` diff is structurally blind: Voice Focus sits below the browser, where Chrome can neither detect nor disable it.) Add the first-run instruction to disable Voice Focus and **record whether it was done** | 45 min | Energy-derived quantities go relative-only; M4's prominence drops the intensity term and runs on duration + F0; the pause floor stays adaptive. **Nothing descopes** |
 | **K1** | **MFA in WSL2.** Boot the pinned `v3.3.9` image. Time `align_one` cold as a subprocess, then warm in a persistent process. Land the fixes: `--temporary_directory` on tmpfs, `/mfa` on a **named volume** (never a Windows bind mount), PostgreSQL from the entrypoint or `mfa configure --disable_auto_server` with SQLite verified. *(The official Dockerfile starts PG only from `~/.bashrc`, which a FastAPI ENTRYPOINT never sources.)* | 1 day, timeboxed | **No phone tier at all ⇒ M7 ships browser-only** (slices 1–2); Gym, echo scoring and all alignment-derived metrics move to M8, in writing. **Latency alone descopes nothing** — it only picks cold-subprocess vs warm-worker |
-| **K3** | **Alignment quality on the learner's own voice.** (a) 5 utterances × ~8 vowel boundaries hand-checked in Praat with MFA's TextGrid **pre-loaded** (nudge, don't segment from scratch); report the **signed mean Δ**, not \|Δ\|. (b) Test-retest: 5 sentences × 5 reads, same mic, same `captureSettings`; within-sentence SD of the M3 ratio | 1.5 h | Signed bias large relative to the 50–100 ms difference M3 claims to measure ⇒ **M4 does not ship** and M3 ships as a trend line **with no verdict**. Same if the SD exceeds a third of the smallest change worth calling improvement |
+| **K3** | **Alignment quality on the learner's own voice.** (a) 5 utterances × ~8 vowel boundaries hand-checked in Praat with MFA's TextGrid **pre-loaded** (nudge, don't segment from scratch); report the **signed mean Δ**, not \|Δ\|. (b) Test-retest: 5 sentences × 5 reads, same mic, same `captureSettings`; within-sentence SD of the M3 ratio | 1.5 h | Signed bias large relative to the 50–100 ms difference M3 claims to measure ⇒ **every verdict is withdrawn**: M4 does not ship, and M3, M3-ext and **M-LEX** ship as trend/comparison only, with no pass/fail. Same if the SD exceeds a third of the smallest change worth calling improvement. The ribbon, the hum and the re-attempt loop are unaffected — they compare you to yourself and need no absolute accuracy |
 | **K4** | **Minimal-pair forced choice.** Record deliberate productions of both sides of 5 pairs (ship/sheep, vet/bet, zoo/Sue, bad/bed, jet/yet). Confirm the aligner separates them and that a margin threshold yields `'unclear'` | 1 h | **Minimal pairs cut from v1 entirely.** `pron:seg:` unused, BLOCKER contrast drills deferred to M8. **Nothing else is touched** |
 
 **Why K3 is not optional:** MFA's error is *correlated with the learner error being detected*. A systematically biased aligner is perfectly repeatable, so test-retest alone is blind to it — and as the learner improves, the bias shrinks, moving the trend line for a reason that isn't them.
@@ -478,7 +479,7 @@ Each has its descope clause written **in advance**, so the decision is arithmeti
 | **1** | `micStream.js` + AudioWorklet + pause profile, one sentence under the learner's bubble. **No sidecar, no Docker, no Prisma** | The clock/anchor design and the endpoint-anchored placement classifier; StrictMode-safe capture | Worklet emits in **both** `vite dev` and `vite build`; all 40 hook tests green with the third `vi.mock`; `coverage.include` extended in the same commit; a test asserts the worklet ring is **not** reset by a recognizer restart |
 | **2** | Persistence spine: `db.js`, `app.js`/`index.js` split, Vitest on the server, root `test` script, `Session`/`Turn` written for the first time | That Prisma works and the server is testable | `npm test` at root runs both suites; a conversation writes a `Session` and its `Turn`s |
 | **3** | Sidecar walking skeleton: Docker image, `/pron/score` returning a phone tier for one hardcoded WAV, the `pronunciation/` factory with `none` first-class, multipart transport, `/pron` proxy line. **Plus the stress lexicon (§6.2) generated from the pinned dictionary.** No metrics, no UI | The transport contract and the degrade path end-to-end | A phone tier round-trips; killing the container yields `{scored:false, reason:'scorer-offline'}` and the UI stays alive; the lexicon resolves a sample coach line with the sidecar stopped |
-| **4** | **Gym v0.** View toggle, 6 hardcoded units, model → record → ribbon + imperative sentence + hum A/B → unlimited re-attempt with ghost track. **M3, M3-ext and M-LEX scored.** `GymAttempt` persisted | The milestone's actual promise, in an isolated screen with zero conversation-state-machine risk. **K3's test-retest runs here on real audio** | The M3 ratio's within-sentence SD across 5 reads clears K3's threshold. If not, the ribbon ships without a verdict and work stops to recalibrate |
+| **4** | **Gym v0.** View toggle, 6 hardcoded units, model → record → ribbon + imperative sentence + hum A/B → unlimited re-attempt with ghost track. **M3, M3-ext and M-LEX scored.** `PronAttempt` persisted | The milestone's actual promise, in an isolated screen with zero conversation-state-machine risk. **K3's test-retest runs here on real audio** | The M3 ratio's within-sentence SD across 5 reads clears K3's threshold. If not, the ribbon ships without a verdict and work stops to recalibrate |
 | **5** | Ledger + spacing: `ErrorLedger` writes, the `nextDrillAt` ladder, the 6-item daily set | That the loop has memory — what makes it teaching rather than measuring | A Monday failure reappears Tuesday; a clean pass doesn't |
 | **6** | Beat karaoke (C) + `useReducedMotion` | Presentation only, on a step that already works | Both `prefers-reduced-motion` branches asserted; `StatHeader` + the new SVG in the a11y suite |
 | **7** | Echo moment: the `"echo"` status member, `useEchoMoment`, stress dots (D), the offer policy, **lexicon-based eligibility on ad-hoc coach lines** | The bridge from Gym to conversation; reuses slice 4's scoring path unchanged | An echo attempt never appears in `messages` and never reaches the history window; Skip works from `interrupt()`; an OOV line silently produces no offer |
@@ -487,6 +488,12 @@ Each has its descope clause written **in advance**, so the decision is arithmeti
 Slices 1–2 need **no Docker at all**. The riskiest dependency is discovered before the schema, the curriculum and the visualisations are committed to it. Minimal pairs go last because they are the only component whose failure costs nothing already shipped.
 
 **One-line drive-by, slice 1:** patch the coach system prompt from *"Spanish-speaking adult (level B1–B2)"* to C1–C2. Shipping a C1–C2 prosody engine behind a B1–B2 coach is a contradiction audible every turn.
+
+### 14.1 Plan decomposition
+
+This spec is one milestone but **more than one implementation plan**. The first plan covers **Phase 0 (K2, K1) + slices 1–3** — through the walking skeleton, ending at a proven transport contract and a proven degrade path. Slices 4–8 get a second plan written *after* K1 and K3 have resolved, because their content depends on those outcomes: if K1 fails, slices 3–8 do not exist; if K3 fails, slice 4 ships without verdicts and slices 5–7 change shape.
+
+Writing one plan for all eight slices now would be writing fiction for the second half of it.
 
 ---
 
@@ -516,14 +523,6 @@ Therefore: **every threshold is a named constant marked `UNCALIBRATED`**, feedba
 ### C1–C2 caveat
 
 Most L2 prosody literature samples broad proficiency ranges. At C1–C2 the learner is already near ceiling on lexical stress and inside the rate band, where published relationships discriminate least. Expect metrics that separate B1 from C1 to be near-useless for C1 vs C2 — which is why the curriculum is weighted toward **nuclear-stress placement, deaccenting of given information, and function-word weak forms** rather than toward the metrics with the best published effect sizes.
-
----
-
-### 14.1 Plan decomposition
-
-This spec is one milestone but **more than one implementation plan**. The first plan covers **Phase 0 (K2, K1) + slices 1–3** — through the walking skeleton, ending at a proven transport contract and a proven degrade path. Slices 4–8 get a second plan written *after* K1 and K3 have resolved, because their content depends on those outcomes: if K1 fails, slices 3–8 do not exist; if K3 fails, slice 4 ships without a verdict and slices 5–7 change shape.
-
-Writing one plan for all eight slices now would be writing fiction for the second half of it.
 
 ---
 
