@@ -957,6 +957,14 @@ git commit -m "feat(prosody): import-free AudioWorklet emitting per-hop RMS"
 
 ### Task 7: `micStream.js` — the single Web Audio boundary
 
+> **AMENDED after review — the Step 3 code below is superseded by what shipped in `805441c`.**
+> The reference implementation had two resource bugs that broke the module's own stated invariant, plus a coverage shortfall:
+> 1. **Mic leak on partial acquisition.** `getUserMedia` and `new AudioContext()` both succeed before `current` is assigned, so a throw from `addModule` / `new AudioWorkletNode` / `.connect()` (worklet 404, CSP blocking module workers, no `AudioWorklet`) abandoned a live track that `releaseMicStream()` could then never stop. Fixed with a `teardown(stream, ctx, node)` helper called from a `catch`.
+> 2. **Release during acquisition silently dropped.** `releaseMicStream()` while opening was a no-op, and acquisition then published the stream anyway — reachable from `main.jsx`'s own `visibilitychange` handler. Fixed with a `releaseRequested` flag the acquisition honours before publishing.
+> 3. **Branch coverage 64.28%**, under the 80% gate this plan enforces. Seven tests added, including one per bug above.
+>
+> Read `client/src/lib/micStream.js` at `805441c` as the source of truth for this task.
+
 **Files:**
 - Create: `client/src/lib/micStream.js`
 - Create: `client/src/lib/micStream.test.js`
