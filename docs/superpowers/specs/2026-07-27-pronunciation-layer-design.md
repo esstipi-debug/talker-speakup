@@ -118,15 +118,18 @@ required in both modes — in `unscripted` the caller passes the ASR hypothesis.
 
 ```
 # --- Pronunciation (CAPT) ---
-# local  -> score via the sidecar container (default once the image is up)
-# mock   -> deterministic offline pseudo-scores, $0
+# local  -> score via the sidecar container
+# mock   -> deterministic offline pseudo-scores, $0  (code default, per §7)
 # azure  -> calibration reference only; never the runtime path
-PRON_PROVIDER=local
+PRON_PROVIDER=mock
 PRON_URL=http://localhost:8899
-PRON_MODEL=mrrubino/wav2vec2-large-xlsr-53-l2-arctic-phoneme
+PRON_MODEL=facebook/wav2vec2-lv-60-espeak-cv-ft
 # AZURE_SPEECH_KEY=          (calibration runs only)
 # AZURE_SPEECH_REGION=
 ```
+
+The code default is `mock`, not `local`, so `npm run dev` works with no Docker running. See
+amendment **A6** in §12.
 
 **Why the server serves the prompts** rather than bundling them in the client: when M3/M4 exist, drill content becomes ledger-derived with no client change. The endpoint shape already allows it; today's implementation just reads a versioned JSON file.
 
@@ -142,12 +145,18 @@ Its own container, same ergonomics as Kokoro (`docker run -p 8899:8899`). Ships 
 | 4. GOP | per phoneme: `log p(expected) − log max p(any)`, normalized to 0–100 | — |
 | 5. Aggregation | phoneme → syllable → word → sentence | — |
 
-**Model selection is deferred to the calibration harness, not decided here.** The two candidates already identified:
+**The runtime model is `facebook/wav2vec2-lv-60-espeak-cv-ft`** (392-token espeak IPA vocabulary,
+Apache-2.0). The model id stays an env var, but the default is now fixed on a **phoneme-inventory**
+criterion rather than a corpus one.
 
-- `mrrubino/wav2vec2-large-xlsr-53-l2-arctic-phoneme` — Apache-2.0, L2-ARCTIC (a corpus that includes L1-Spanish speakers), CER 0.128
-- `slplab/wav2vec2-large-robust-L2-english-phoneme-recognition` — better PER (0.0905), IPA output, but trained on L1-Korean learners
+The two candidates this spec originally named were both disqualified by inspecting their actual
+tokenizer vocabularies — see amendments **A1** and **A2** in §12. The short version: a model cannot
+teach a contrast its vocabulary cannot name, and the originally-proposed default could not emit
+`ə`, `iː`, or `dʒ` — three of the seven drill targets in §5, including the ship/sheep contrast used
+as the worked example in §4.3.
 
-The model id is an env var with one shipped default; §8 decides which.
+Corpus relevance still matters, but it is a **calibration** question (§8), not a selection gate:
+§8's harness measures correlation with human judgment and may still recommend a fine-tune.
 
 ### 4.3 Report contract
 
@@ -254,3 +263,28 @@ Sequenced after Stage 1 not for cost reasons (local is $0 either way) but for im
 ## 11. Repo-specific implementation note
 
 This repo has a documented history of **concurrent untracked WIP contaminating commits** (M1.5 shipped an import of an untracked file despite tests passing moments earlier). Verify **staged** content with `git show :<path>` — not just the working tree — before every commit in this milestone.
+
+## 12. Amendments after verification (2026-07-27)
+
+The design above was approved on the strength of desk research. Before writing the implementation
+plan, the library APIs and model vocabularies were **verified by execution** — vocab files pulled
+from HuggingFace, `forced_align` run across four torchaudio versions, a real webm decoded, espeak-ng
+invoked. That pass invalidated several approved decisions. They are recorded here rather than
+silently rewritten, so the reasoning stays auditable.
+
+| # | Approved text said | Corrected to | Why |
+|---|---|---|---|
+| **A1** | Default model `mrrubino/wav2vec2-large-xlsr-53-l2-arctic-phoneme` | `facebook/wav2vec2-lv-60-espeak-cv-ft` | mrrubino's vocabulary is **40 tokens** and contains no `ə`, no `ː`/`iː`, no `dʒ`. It cannot represent 3 of the 7 §5 drill targets, including the ship/sheep contrast this spec uses as its worked example. facebook's is the full 392-token espeak IPA inventory. Both Apache-2.0. |
+| **A2** | slplab model listed as an IPA candidate | Removed from every runtime path; permitted only as a comparison row in `tools/calibration/` | Emits **ARPAbet** with `_err` tags, not IPA (91 tokens), and declares **no licence**. |
+| **A3** | `torchaudio.pipelines.MMS_FA` implied for alignment | Not used. Alignment runs on the phoneme model's own log-probs. | MMS_FA is character-level, and **CC-BY-NC** — a non-commercial licence in a project with no licence decided yet (README: "License: TBD"). |
+| **A4** | §4.3 implied phone `start`/`end` come straight from alignment | A deterministic blank-attribution expansion pass (`expand_spans()`) | Verified by execution: raw CTC spans are ~1 frame (20 ms) and cover only ~9 % of frames. Reporting them as durations would be wrong. |
+| **A5** | §4.4 derives `fluency` from the alignment | `fluency` comes from a separate energy-VAD pass over the decoded PCM | The alignment carries no pause information at all. This was a factual error in the approved design. |
+| **A6** | §4.1 sample config shipped `PRON_PROVIDER=local` | Code default is `mock`; `.env.example` ships `mock` | §4.1 contradicted §7 ("PRON_PROVIDER unset → mock"). §7 wins: `npm run dev` must work with no Docker. |
+| **A7** | §4.3 report contract | Gains a required `prosody` object and `pronProvider`/`mode`/`model` envelope fields | Stage 2 (§9) needs prosody, and it must exist in the schema from the start so it is not invented ad hoc later. |
+| **A8** | §6 ranking rule, location unstated | Ranking lives client-side in `client/src/lib/pronErrors.js`; the server report is unranked and complete | Presentation rule belongs in the presentation layer, and it keeps the raw report reusable by M3/M4. |
+| **A9** | (not addressed) | `server/src/app.js` is new, exporting `createApp()`; `server/src/index.js` becomes a bootstrap | `server/src/index.js` calls `app.listen` at import time and exports nothing, which makes the §8 route-contract tests impossible to write. |
+
+**Verification debt:** the four adversarial critic passes planned for the implementation plan
+(placeholders, interface drift, spec coverage, TDD quality) **did not run** — the API returned
+`529 Overloaded` on two consecutive attempts. The plan carries a self-review only. Re-running the
+adversarial pass is outstanding work, tracked in the plan documents.
