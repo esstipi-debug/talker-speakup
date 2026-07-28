@@ -1,7 +1,7 @@
 # Pronunciation Layer (CAPT) — Design Spec
 
-- **Date:** 2026-07-27
-- **Status:** Approved (design), pending implementation plan
+- **Date:** 2026-07-27 (amended 2026-07-28, see §12)
+- **Status:** Approved (design), implementation in progress
 - **Owner:** SpeakUp (C:\talker)
 - **Milestone:** M7 — Pronunciation (CAPT)
 - **Relates:** builds the server-side audio route that M6 (offline Whisper) also needs; feeds `ErrorLedger.type = "pronunciation"` once M3 lands
@@ -288,3 +288,82 @@ silently rewritten, so the reasoning stays auditable.
 (placeholders, interface drift, spec coverage, TDD quality) **did not run** — the API returned
 `529 Overloaded` on two consecutive attempts. The plan carries a self-review only. Re-running the
 adversarial pass is outstanding work, tracked in the plan documents.
+
+## 13. Amendment: Azure as a budget-capped runtime supplement (2026-07-28)
+
+§0 and §4.1 stated Azure is "never a runtime path... only a calibration reference." That is
+**reversed for the specific case below**, at the user's request, after real-world cost math the
+original design under-weighted for genuinely intensive daily use.
+
+### 13.1 Why
+
+The user asked for **6–7 h/day, 30 days/month** of practice, with the whole SpeakUp kit (brain +
+TTS + pronunciation) under **$20/month total**, and — independently — for the local sidecar to
+never interfere with using the machine for work while it runs.
+
+Re-running §1's cost table at that volume, using the same 25–35 % speaking-duty-cycle assumption
+already in this spec (yielding 50–75 audio-hours/month):
+
+| Engine | Cost at 50–75 audio-h/month |
+|---|---:|
+| Azure short-audio ($0.66/h) | $33 – $50 |
+| Azure real-time ($1.32/h) | $66 – $99 |
+| SpeechSuper (scripted, per-sentence) | ~$36+ |
+| SpeechAce (15-second billing blocks) | $190 – $440 |
+| **Local (sidecar)** | **$0** |
+
+**No cloud vendor is affordable as the primary engine at this volume.** Per-unit billing (per
+second, per request, per 15-second block) scales with practice volume by construction; the
+project's own hardware does not. This reconfirms §1's original local-first argument, it does not
+overturn it — Azure remains **unfit as the default or primary engine**.
+
+On the separate machine-impact question: the chosen acoustic model
+(`facebook/wav2vec2-lv-60-espeak-cv-ft`, verified in §12/A1) is a 1.26 GB, 315M-parameter
+wav2vec2-**large** checkpoint — roughly 1.5–2.5 GB resident RAM while the sidecar container is up,
+plus a real multi-second CPU burst per submitted utterance (near-zero when idle between requests).
+Docker resource flags (`--cpus`, `--memory`) bound this to a hard ceiling rather than hope, and
+running the container only for the duration of a drill session (not as a 24/7 daemon) bounds it
+further. This guidance belongs to Plan 1 (the sidecar), which has not started; it is recorded here
+so it is not lost before that plan resumes.
+
+### 13.2 The decision
+
+- **Local sidecar remains the primary engine**, run resource-capped and on-demand (Plan 1 scope).
+  It is the only engine whose cost is independent of practice volume.
+- **Azure becomes a manually-selected, budget-capped supplement** — `PRON_PROVIDER=azure` is still
+  required explicitly (§7's "no accidental selection" guarantee, already implemented and
+  mutation-tested in Task 8, is **unchanged** — this amendment adds a spending ceiling on top of
+  that guarantee, it does not loosen it). It is sized for periodic verification, not for covering
+  6–7 h/day of volume: **$12/month**, ≈ 18 h of Azure audio at the short-audio rate.
+- The cap is enforced by a **decorator**, not a change to `AzurePron` itself: `BudgetCappedPron`
+  wraps a metered provider and a fallback provider. Before delegating, it checks a persisted
+  monthly counter; over cap, it silently serves the fallback's result instead — per principle #3,
+  "degrade, never break." This is a different failure class from a sidecar/API outage: an outage
+  still 502s `PRON_UNAVAILABLE` exactly as Task 14 specifies, because a mocked score standing in
+  for a claimed-real one would be dishonest. A **self-imposed spending limit** silently falling
+  back to the mock engine is not dishonest, because `MockPron` is already a legitimate, documented
+  provider — the response's own `pronProvider` field will honestly read `"mock"`, not `"azure"`.
+- **Persistence:** a single JSON file (`server/.pron-budget.json`, git-ignored), not a database
+  table. This is a deliberate, small exception to "no DB writes before M3" — a bare `{month,
+  audioSecondsUsed}` counter, not the ErrorLedger/VocabItem schema M3 owns. Read-then-write with no
+  file locking: this is a personal, single-process app, not a multi-tenant billing system: the
+  accepted risk is a few seconds of overshoot past the cap under a race, never real correctness
+  loss. Usage is recorded **after** a successful Azure call, from the report's own `durationSec`
+  (already part of the envelope per A7) — accurate, and it avoids probing audio duration
+  server-side before sending.
+- **New env vars** (server, added in the now-renumbered `.env.example` task):
+  `PRON_AZURE_MONTHLY_CAP_USD` (default `12`), `PRON_AZURE_RATE_PER_HOUR_USD` (default `0.66`,
+  matching Azure's short-audio REST rate — configurable because actual billing depends on which
+  Azure tier is actually in use), `PRON_BUDGET_STATE_FILE` (default `server/.pron-budget.json`).
+
+### 13.3 What does NOT change
+
+- Task 8's factory guarantee (`PRON_PROVIDER` unset + a key present ⇒ still `mock`) is untouched —
+  no test it wrote is contradicted by this amendment.
+- Task 14's degradation ladder (sidecar/API failures → 502, learner-caused failures → 4xx) is
+  untouched — it is orthogonal to spending, not superseded.
+- No new `PRON_ERROR_CODES` value: the honesty this amendment relies on is the existing
+  `pronProvider` envelope field, not a new error code.
+- Stale comments in already-shipped code (`azure.js`, `index.js`, `routes/pron.js`) that state
+  "calibration-only, never runtime" are now inaccurate and are corrected as part of the new tasks
+  below, not as a reopening of those tasks' already-approved reviews.

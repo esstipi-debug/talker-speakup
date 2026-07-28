@@ -3594,7 +3594,691 @@ git commit -m "feat(pron): typed degradation for sidecar and learner-side failur
 
 ---
 
-### Task 15: Document the slot in `server/.env.example`
+### Task 15: `BudgetGuard` — the persisted monthly spend counter
+
+**Added 2026-07-28** (design spec §13): Azure is now a manually-selected, budget-capped runtime
+supplement, not calibration-only. This task builds the piece that makes "capped" a real, enforced
+ceiling rather than a comment: a monthly counter that survives a server restart.
+
+**Files:**
+- Create: `server/src/pron/budgetGuard.js`
+- Test: `server/src/pron/budgetGuard.test.js`
+- Modify: `server/vitest.config.js` — add `"src/pron/budgetGuard.js"` to `coverage.include`
+- Modify: root `.gitignore` — add `server/.pron-budget.json` (the default state-file path; never
+  committed, same convention as `.env`)
+
+**Interfaces:**
+- Consumes: `node:fs` only.
+- Produces: `BudgetGuard` — `new BudgetGuard({ statePath, capUsd, ratePerHourUsd, now? })`,
+  `.spentUsd(): number`, `.isOverCap(): boolean`, `.recordUsage(audioSeconds: number): void`. Task 16
+  consumes this exact shape.
+
+#### Step 15.1 — Write the failing tests
+
+Create `server/src/pron/budgetGuard.test.js`:
+
+```js
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { BudgetGuard } from "./budgetGuard.js";
+
+let statePath;
+
+beforeEach(() => {
+  statePath = path.join(
+    os.tmpdir(),
+    `pron-budget-test-${Date.now()}-${Math.random().toString(36).slice(2)}.json`,
+  );
+});
+
+afterEach(() => {
+  fs.rmSync(statePath, { force: true });
+});
+
+function guard(overrides = {}) {
+  return new BudgetGuard({
+    statePath,
+    capUsd: 12,
+    ratePerHourUsd: 0.66,
+    now: () => new Date("2026-07-15T12:00:00Z"),
+    ...overrides,
+  });
+}
+
+describe("BudgetGuard", () => {
+  it("starts at zero spend when no state file exists", () => {
+    const g = guard();
+    expect(g.spentUsd()).toBe(0);
+    expect(g.isOverCap()).toBe(false);
+  });
+
+  it("computes spend from recorded audio seconds at the configured rate", () => {
+    const g = guard();
+    g.recordUsage(3600); // 1 hour
+    expect(g.spentUsd()).toBeCloseTo(0.66, 5);
+  });
+
+  it("accumulates usage across multiple recordUsage calls", () => {
+    const g = guard();
+    g.recordUsage(1800);
+    g.recordUsage(1800);
+    expect(g.spentUsd()).toBeCloseTo(0.66, 5);
+  });
+
+  it("reports over cap once accumulated spend meets the cap", () => {
+    const g = guard({ capUsd: 1 });
+    g.recordUsage((1 / 0.66) * 3600); // exactly $1 at $0.66/hr
+    expect(g.isOverCap()).toBe(true);
+  });
+
+  it("reports under cap while spend remains below the cap", () => {
+    const g = guard({ capUsd: 1 });
+    g.recordUsage(1000);
+    expect(g.isOverCap()).toBe(false);
+  });
+
+  it("persists usage across separate instances pointed at the same file", () => {
+    guard().recordUsage(3600);
+    const fresh = guard();
+    expect(fresh.spentUsd()).toBeCloseTo(0.66, 5);
+  });
+
+  it("resets to zero when the persisted state belongs to a prior month", () => {
+    fs.writeFileSync(
+      statePath,
+      JSON.stringify({ month: "2020-01", audioSecondsUsed: 99999 }),
+      "utf8",
+    );
+    const g = guard(); // now() is fixed at 2026-07
+    expect(g.spentUsd()).toBe(0);
+  });
+
+  it("treats a corrupt state file as a fresh start rather than throwing", () => {
+    fs.writeFileSync(statePath, "{not json", "utf8");
+    expect(() => guard().spentUsd()).not.toThrow();
+    expect(guard().spentUsd()).toBe(0);
+  });
+
+  it("clamps a negative or non-numeric usage value to zero rather than reducing the total", () => {
+    const g = guard();
+    g.recordUsage(3600);
+    g.recordUsage(-500);
+    g.recordUsage(NaN);
+    expect(g.spentUsd()).toBeCloseTo(0.66, 5);
+  });
+});
+```
+
+#### Step 15.2 — See it fail
+
+```powershell
+npm --prefix server test
+```
+
+Expected: `Cannot find module './budgetGuard.js'` (or Vitest's equivalent phrasing) — the module does
+not exist yet. Same root cause every "see it fail" step in this plan has hit; the exact wording is
+not the point.
+
+#### Step 15.3 — Implement
+
+Create `server/src/pron/budgetGuard.js`:
+
+```js
+import fs from "node:fs";
+
+/**
+ * Tracks cumulative audio-seconds submitted to a metered pronunciation
+ * provider (Azure) during the current calendar month, backed by a small
+ * JSON file — not the database, which M3 owns. Deliberately lock-free: a
+ * personal, single-process app accepts a few seconds of overshoot under a
+ * race rather than the locking scheme a multi-tenant billing system would
+ * need. See design spec §13.2.
+ */
+export class BudgetGuard {
+  /**
+   * @param {{statePath: string, capUsd: number, ratePerHourUsd: number, now?: () => Date}} opts
+   */
+  constructor({ statePath, capUsd, ratePerHourUsd, now = () => new Date() }) {
+    this.statePath = statePath;
+    this.capUsd = capUsd;
+    this.ratePerHourUsd = ratePerHourUsd;
+    this.now = now;
+  }
+
+  _monthKey() {
+    const d = this.now();
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+  }
+
+  _readState() {
+    const month = this._monthKey();
+    try {
+      const parsed = JSON.parse(fs.readFileSync(this.statePath, "utf8"));
+      if (parsed.month === month && typeof parsed.audioSecondsUsed === "number") {
+        return { month, audioSecondsUsed: parsed.audioSecondsUsed };
+      }
+    } catch {
+      // missing file, corrupt JSON, or a prior month — start this month fresh.
+    }
+    return { month, audioSecondsUsed: 0 };
+  }
+
+  _writeState(state) {
+    fs.writeFileSync(this.statePath, JSON.stringify(state), "utf8");
+  }
+
+  /** Estimated dollars spent so far this calendar month, at the configured rate. */
+  spentUsd() {
+    const { audioSecondsUsed } = this._readState();
+    return (audioSecondsUsed / 3600) * this.ratePerHourUsd;
+  }
+
+  /** True once this month's estimated spend has met or passed the cap. */
+  isOverCap() {
+    return this.spentUsd() >= this.capUsd;
+  }
+
+  /** Record actual audio seconds billed for one completed metered call. */
+  recordUsage(audioSeconds) {
+    const state = this._readState();
+    state.audioSecondsUsed += Math.max(0, Number(audioSeconds) || 0);
+    this._writeState(state);
+  }
+}
+```
+
+In `server/vitest.config.js`, add `"src/pron/budgetGuard.js"` to the `coverage.include` array
+(alongside the existing seven entries).
+
+In the repo root `.gitignore`, add one line near the existing `.env` patterns:
+
+```
+server/.pron-budget.json
+```
+
+#### Step 15.4 — See it pass
+
+```powershell
+npm --prefix server test
+```
+
+Expected: all prior tests still pass, plus 9 new passing tests in `budgetGuard.test.js`.
+
+#### Step 15.5 — Commit
+
+```powershell
+git add server/src/pron/budgetGuard.js server/src/pron/budgetGuard.test.js server/vitest.config.js .gitignore
+git show :server/src/pron/budgetGuard.js | Select-String "class BudgetGuard"
+git commit -m "feat(pron): BudgetGuard — persisted monthly spend counter for metered providers"
+```
+
+---
+
+### Task 16: `BudgetCappedPron` — the decorator that enforces the cap without breaking degradation
+
+**Files:**
+- Create: `server/src/pron/budgetCappedPron.js`
+- Test: `server/src/pron/budgetCappedPron.test.js`
+- Modify: `server/vitest.config.js` — add `"src/pron/budgetCappedPron.js"` to `coverage.include`
+
+**Interfaces:**
+- Consumes: `BudgetGuard` (Task 15) by shape (`.isOverCap()`, `.recordUsage()`), not by import — any
+  object with that shape works, which is what the tests exercise directly with stand-ins.
+- Produces: `BudgetCappedPron` — `new BudgetCappedPron(metered, fallback, guard)`, `.assess(audioBuffer,
+  opts): Promise<PronunciationReport>`, `.health(): Promise<object>`. Task 17 consumes this
+  constructor signature directly.
+
+**The property that matters (design §13.2):** a spending cap and a provider outage are different
+failure classes. Over cap → silently serve the fallback (principle #3, "degrade, never break" — a
+`mock`-labelled report is honest). A real provider error (bad key, network down) must **propagate**,
+not be swallowed into a silent fallback — that path already 502s per Task 14, and a mocked score
+standing in for a claimed-real one would be dishonest in a way self-imposed budgeting is not.
+
+#### Step 16.1 — Write the failing tests
+
+Create `server/src/pron/budgetCappedPron.test.js`:
+
+```js
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { BudgetCappedPron } from "./budgetCappedPron.js";
+import { BudgetGuard } from "./budgetGuard.js";
+
+function stubProvider(reportOverrides = {}) {
+  return {
+    assess: vi.fn().mockResolvedValue({ pronProvider: "azure", durationSec: 4.2, ...reportOverrides }),
+    health: vi.fn().mockResolvedValue({ ok: true }),
+  };
+}
+
+function stubGuard(isOverCap = false) {
+  return { isOverCap: vi.fn().mockReturnValue(isOverCap), recordUsage: vi.fn() };
+}
+
+describe("BudgetCappedPron", () => {
+  it("delegates to the metered provider while under cap", async () => {
+    const metered = stubProvider();
+    const fallback = stubProvider({ pronProvider: "mock" });
+    const wrapped = new BudgetCappedPron(metered, fallback, stubGuard(false));
+    const report = await wrapped.assess(Buffer.from("x"), { text: "hi" });
+    expect(metered.assess).toHaveBeenCalledWith(Buffer.from("x"), { text: "hi" });
+    expect(fallback.assess).not.toHaveBeenCalled();
+    expect(report.pronProvider).toBe("azure");
+  });
+
+  it("delegates to the fallback provider once over cap", async () => {
+    const metered = stubProvider();
+    const fallback = stubProvider({ pronProvider: "mock" });
+    const wrapped = new BudgetCappedPron(metered, fallback, stubGuard(true));
+    const report = await wrapped.assess(Buffer.from("x"), { text: "hi" });
+    expect(fallback.assess).toHaveBeenCalledWith(Buffer.from("x"), { text: "hi" });
+    expect(metered.assess).not.toHaveBeenCalled();
+    expect(report.pronProvider).toBe("mock");
+  });
+
+  it("records the metered call's actual reported duration on success", async () => {
+    const metered = stubProvider({ durationSec: 7.5 });
+    const guard = stubGuard(false);
+    const wrapped = new BudgetCappedPron(metered, stubProvider(), guard);
+    await wrapped.assess(Buffer.from("x"), { text: "hi" });
+    expect(guard.recordUsage).toHaveBeenCalledWith(7.5);
+  });
+
+  it("does not record usage when the metered report carries no durationSec", async () => {
+    const metered = { assess: vi.fn().mockResolvedValue({ pronProvider: "azure" }), health: vi.fn() };
+    const guard = stubGuard(false);
+    const wrapped = new BudgetCappedPron(metered, stubProvider(), guard);
+    await wrapped.assess(Buffer.from("x"), { text: "hi" });
+    expect(guard.recordUsage).not.toHaveBeenCalled();
+  });
+
+  it("does not record usage on the fallback path — fallback calls are not metered", async () => {
+    const guard = stubGuard(true);
+    const wrapped = new BudgetCappedPron(stubProvider(), stubProvider(), guard);
+    await wrapped.assess(Buffer.from("x"), { text: "hi" });
+    expect(guard.recordUsage).not.toHaveBeenCalled();
+  });
+
+  it("propagates a metered provider's own failure rather than silently falling back", async () => {
+    const metered = {
+      assess: vi.fn().mockRejectedValue(Object.assign(new Error("boom"), { code: "PRON_UNAVAILABLE" })),
+      health: vi.fn(),
+    };
+    const fallback = stubProvider();
+    const wrapped = new BudgetCappedPron(metered, fallback, stubGuard(false));
+    await expect(wrapped.assess(Buffer.from("x"), { text: "hi" })).rejects.toMatchObject({
+      code: "PRON_UNAVAILABLE",
+    });
+    expect(fallback.assess).not.toHaveBeenCalled();
+  });
+
+  it("reports health from the metered provider, not the fallback", async () => {
+    const metered = stubProvider();
+    metered.health.mockResolvedValue({ ok: true, note: "azure" });
+    const fallback = stubProvider();
+    const wrapped = new BudgetCappedPron(metered, fallback, stubGuard(false));
+    const health = await wrapped.health();
+    expect(health).toEqual({ ok: true, note: "azure" });
+    expect(fallback.health).not.toHaveBeenCalled();
+  });
+
+  describe("integration with a real BudgetGuard", () => {
+    let statePath;
+    beforeEach(() => {
+      statePath = path.join(
+        os.tmpdir(),
+        `pron-budget-cap-test-${Date.now()}-${Math.random().toString(36).slice(2)}.json`,
+      );
+    });
+    afterEach(() => {
+      fs.rmSync(statePath, { force: true });
+    });
+
+    it("switches from metered to fallback once real recorded usage crosses the cap", async () => {
+      // ratePerHourUsd chosen so that $1 of cap equals exactly 1 second of usage.
+      const guard = new BudgetGuard({ statePath, capUsd: 1, ratePerHourUsd: 3600 });
+      const metered = stubProvider({ durationSec: 2 }); // one call already exceeds the $1 cap
+      const fallback = stubProvider({ pronProvider: "mock" });
+      const wrapped = new BudgetCappedPron(metered, fallback, guard);
+
+      const first = await wrapped.assess(Buffer.from("x"), { text: "hi" });
+      expect(first.pronProvider).toBe("azure");
+
+      const second = await wrapped.assess(Buffer.from("x"), { text: "hi" });
+      expect(second.pronProvider).toBe("mock");
+      expect(metered.assess).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+```
+
+#### Step 16.2 — See it fail
+
+```powershell
+npm --prefix server test
+```
+
+Expected: `Cannot find module './budgetCappedPron.js'`.
+
+#### Step 16.3 — Implement
+
+Create `server/src/pron/budgetCappedPron.js`:
+
+```js
+/**
+ * Wraps a metered provider (Azure) with a monthly spend guard. Before
+ * delegating, refuses to spend further once the guard reports over cap and
+ * serves `fallback` instead — silently, from the caller's point of view, per
+ * principle #3 ("degrade, never break"). This is a spending policy, not an
+ * outage: unlike a real provider failure (which still 502s per design §7 /
+ * Task 14), falling back to a legitimate, documented provider is honest — the
+ * returned report's own `pronProvider` field says so. After a successful
+ * metered call, records the provider's own reported `durationSec` as actual
+ * usage, avoiding the need to probe audio duration before sending.
+ */
+export class BudgetCappedPron {
+  constructor(metered, fallback, guard) {
+    this.metered = metered;
+    this.fallback = fallback;
+    this.guard = guard;
+  }
+
+  async assess(audioBuffer, opts) {
+    if (this.guard.isOverCap()) {
+      return this.fallback.assess(audioBuffer, opts);
+    }
+    const report = await this.metered.assess(audioBuffer, opts);
+    if (typeof report?.durationSec === "number") {
+      this.guard.recordUsage(report.durationSec);
+    }
+    return report;
+  }
+
+  async health() {
+    return this.metered.health();
+  }
+}
+```
+
+In `server/vitest.config.js`, add `"src/pron/budgetCappedPron.js"` to `coverage.include`.
+
+#### Step 16.4 — See it pass
+
+```powershell
+npm --prefix server test
+```
+
+Expected: all prior tests pass, plus 8 new passing tests in `budgetCappedPron.test.js`.
+
+#### Step 16.5 — Commit
+
+```powershell
+git add server/src/pron/budgetCappedPron.js server/src/pron/budgetCappedPron.test.js server/vitest.config.js
+git show :server/src/pron/budgetCappedPron.js | Select-String "class BudgetCappedPron"
+git commit -m "feat(pron): BudgetCappedPron — degrade to mock over budget, never mask a real failure"
+```
+
+---
+
+### Task 17: Wire the budget cap into `getPron()`, and correct the now-stale "never runtime" comments
+
+**This task touches Task 8's already-approved, mutation-tested factory.** Its guarantee — "Azure is
+never selected by accident; `PRON_PROVIDER` must explicitly equal `\"azure\"`" — is **preserved
+exactly**, and no existing test of that guarantee is weakened. What changes is only what happens
+*inside* the already-true "explicit azure" branch: it now returns a spend-capped wrapper instead of
+a raw `AzurePron`.
+
+**Files:**
+- Modify: `server/src/pron/index.js`
+- Modify: `server/src/pron/index.test.js` — one existing assertion is deliberately changed; see Step
+  17.1's note.
+- Modify: `server/src/pron/azure.js` — one line of the header comment (documentation only; no
+  behavioural change; `azure.test.js` needs no change)
+
+**Interfaces:**
+- Consumes: `BudgetGuard` (Task 15), `BudgetCappedPron` (Task 16).
+- Produces: no new export. `getPron()`'s return type note gains `BudgetCappedPron` as a possible
+  concrete type when `PRON_PROVIDER=azure`; `currentPronProvider()`'s contract (`"local"|"mock"|"azure"`)
+  is unchanged — it still reports the *configured* provider, not the wrapper's internal state.
+
+#### Step 17.1 — Write the failing tests
+
+In `server/src/pron/index.test.js`, first **replace** the existing test at (current) lines 49-57:
+
+```js
+  it("selects azure only when a key is present", async () => {
+    const { getPron, currentPronProvider } = await loadPron({
+      PRON_PROVIDER: "azure",
+      AZURE_SPEECH_KEY: "secret",
+    });
+    const { AzurePron } = await import("./azure.js");
+    expect(getPron()).toBeInstanceOf(AzurePron);
+    expect(currentPronProvider()).toBe("azure");
+  });
+```
+
+with:
+
+```js
+  it("wraps azure in a spend guard when a key is present, keeping the reported provider name honest", async () => {
+    const { getPron, currentPronProvider } = await loadPron({
+      PRON_PROVIDER: "azure",
+      AZURE_SPEECH_KEY: "secret",
+    });
+    const { AzurePron } = await import("./azure.js");
+    const { MockPron } = await import("./mock.js");
+    const { BudgetCappedPron } = await import("./budgetCappedPron.js");
+    const pron = getPron();
+    expect(pron).toBeInstanceOf(BudgetCappedPron);
+    expect(pron.metered).toBeInstanceOf(AzurePron);
+    expect(pron.fallback).toBeInstanceOf(MockPron);
+    expect(currentPronProvider()).toBe("azure");
+  });
+```
+
+This is a deliberate change to a previously-approved assertion, not a weakening: the property it
+protects — "explicit `PRON_PROVIDER=azure` + a key selects Azure" — still holds; it is now expressed
+against the wrapper type the design requires, with the wrapped instances checked explicitly so the
+old guarantee is not merely renamed away.
+
+Then **append** these new tests to the same `describe("pron factory — provider resolution", ...)`
+block:
+
+```js
+  it("reads the azure spend cap, rate, and state-file path from env", async () => {
+    const { getPron } = await loadPron({
+      PRON_PROVIDER: "azure",
+      AZURE_SPEECH_KEY: "secret",
+      PRON_AZURE_MONTHLY_CAP_USD: "5",
+      PRON_AZURE_RATE_PER_HOUR_USD: "1.5",
+      PRON_BUDGET_STATE_FILE: "C:/tmp/test-budget.json",
+    });
+    const pron = getPron();
+    expect(pron.guard.capUsd).toBe(5);
+    expect(pron.guard.ratePerHourUsd).toBe(1.5);
+    expect(pron.guard.statePath).toBe("C:/tmp/test-budget.json");
+  });
+
+  it("defaults the azure spend cap, rate, and state-file path when unset", async () => {
+    const { getPron } = await loadPron({ PRON_PROVIDER: "azure", AZURE_SPEECH_KEY: "secret" });
+    const pron = getPron();
+    expect(pron.guard.capUsd).toBe(12);
+    expect(pron.guard.ratePerHourUsd).toBe(0.66);
+    expect(pron.guard.statePath).toBe(".pron-budget.json");
+  });
+
+  it("respects an explicit zero cap rather than silently substituting the default", async () => {
+    // `0 || default` would wrongly discard an intentional "spend nothing" cap — this pins that.
+    const { getPron } = await loadPron({
+      PRON_PROVIDER: "azure",
+      AZURE_SPEECH_KEY: "secret",
+      PRON_AZURE_MONTHLY_CAP_USD: "0",
+    });
+    expect(getPron().guard.capUsd).toBe(0);
+  });
+```
+
+None of this touches the test at (current) lines 80-89, `"never auto-selects azure from
+AZURE_SPEECH_KEY presence alone"` — that path never reaches the `provider === "azure"` branch this
+task changes, and it must still pass unmodified.
+
+Also add these three env keys to the existing `beforeEach` cleanup block (lines 14-19 today) so they
+cannot leak between test files:
+
+```js
+  delete process.env.PRON_AZURE_MONTHLY_CAP_USD;
+  delete process.env.PRON_AZURE_RATE_PER_HOUR_USD;
+  delete process.env.PRON_BUDGET_STATE_FILE;
+```
+
+None of these new cases call `.assess()` on the constructed provider, so `BudgetGuard`'s file I/O
+(which only happens inside `spentUsd()`/`isOverCap()`/`recordUsage()`, never in its constructor) is
+never triggered — these tests read config properties only and cannot leave a stray file behind.
+
+#### Step 17.2 — See it fail
+
+```powershell
+npm --prefix server test
+```
+
+Expected: the rewritten test fails (`getPron()` still returns a raw `AzurePron`, not a
+`BudgetCappedPron`); the three new tests fail (`pron.guard` is `undefined`).
+
+#### Step 17.3 — Implement
+
+In `server/src/pron/index.js`, replace the whole file with:
+
+```js
+import { MockPron } from "./mock.js";
+import { LocalPron } from "./local.js";
+import { AzurePron } from "./azure.js";
+import { BudgetGuard } from "./budgetGuard.js";
+import { BudgetCappedPron } from "./budgetCappedPron.js";
+
+/**
+ * Pluggable pronunciation-assessment factory (design §4.1, amended §13).
+ *   local -> score via the sidecar container on :8899 (CAPT pipeline)
+ *   mock  -> deterministic offline pseudo-scores, $0, no Docker (default)
+ *   azure -> a manually-selected, budget-capped supplement (design §13) —
+ *            still requires an explicit PRON_PROVIDER=azure + a key; wrapped
+ *            in BudgetCappedPron, which falls back to mock once the monthly
+ *            spend cap (PRON_AZURE_MONTHLY_CAP_USD) is met. Never the default,
+ *            never selected by key presence alone.
+ * Swap with PRON_PROVIDER in server/.env.
+ */
+let _pron = null;
+let _provider = null;
+
+const DEFAULT_AZURE_CAP_USD = 12;
+const DEFAULT_AZURE_RATE_PER_HOUR_USD = 0.66;
+const DEFAULT_BUDGET_STATE_FILE = ".pron-budget.json";
+
+function numberEnv(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function resolveProvider() {
+  const explicit = process.env.PRON_PROVIDER?.trim().toLowerCase();
+  const hasAzureKey = !!process.env.AZURE_SPEECH_KEY?.trim();
+
+  let provider = explicit || "mock";
+
+  if (provider === "azure" && !hasAzureKey) {
+    console.warn("[pron] PRON_PROVIDER=azure but AZURE_SPEECH_KEY is missing → falling back to mock.");
+    provider = "mock";
+  }
+  if (provider !== "local" && provider !== "mock" && provider !== "azure") {
+    console.warn(`[pron] unknown PRON_PROVIDER="${provider}" → falling back to mock.`);
+    provider = "mock";
+  }
+  return provider;
+}
+
+function buildAzurePron() {
+  const guard = new BudgetGuard({
+    statePath: process.env.PRON_BUDGET_STATE_FILE?.trim() || DEFAULT_BUDGET_STATE_FILE,
+    capUsd: numberEnv("PRON_AZURE_MONTHLY_CAP_USD", DEFAULT_AZURE_CAP_USD),
+    ratePerHourUsd: numberEnv("PRON_AZURE_RATE_PER_HOUR_USD", DEFAULT_AZURE_RATE_PER_HOUR_USD),
+  });
+  return new BudgetCappedPron(new AzurePron(), new MockPron(), guard);
+}
+
+/**
+ * @returns {MockPron|LocalPron|BudgetCappedPron} never null — the drill always has a scorer to call
+ */
+export function getPron() {
+  if (_pron) return _pron;
+  _provider = resolveProvider();
+  _pron =
+    _provider === "local"
+      ? new LocalPron()
+      : _provider === "azure"
+        ? buildAzurePron()
+        : new MockPron();
+  console.log(`[pron] provider = ${_provider}`);
+  return _pron;
+}
+
+/**
+ * @returns {"local"|"mock"|"azure"}
+ */
+export function currentPronProvider() {
+  if (!_provider) getPron();
+  return _provider;
+}
+```
+
+The `numberEnv` helper exists specifically so `PRON_AZURE_MONTHLY_CAP_USD=0` is respected (`0` is a
+valid, deliberate "spend nothing" cap) rather than being treated as falsy and silently replaced by
+the default — a plain `Number(x) || fallback` pattern would get this wrong.
+
+In `server/src/pron/azure.js`, change only the first sentence of the header comment (line 4) from:
+
+```
+ * Azure Speech pronunciation-assessment adapter — CALIBRATION ONLY (design §2,
+ * "Cloud as a runtime path" is a non-goal). This class enforces presence of
+```
+
+to:
+
+```
+ * Azure Speech pronunciation-assessment adapter — a manually-selected,
+ * budget-capped runtime supplement (design §13), never the default and never
+ * auto-selected. Wrapped in BudgetCappedPron by the factory (./index.js) when
+ * explicitly chosen. This class enforces presence of
+```
+
+Leave the rest of that docblock (the "EXTERNAL CALL SITE — verified 2026-07-27" research notes and
+everything below) untouched — that content is still accurate and still valuable.
+
+#### Step 17.4 — See it pass
+
+```powershell
+npm --prefix server test
+```
+
+Expected: `Test Files 9 passed (9)`, all tests passing (the exact total is not worth hand-computing
+here — several earlier tasks' predicted counts drifted from reality without indicating a problem;
+what matters is zero failures).
+
+#### Step 17.5 — Commit
+
+```powershell
+git add server/src/pron/index.js server/src/pron/index.test.js server/src/pron/azure.js
+git show :server/src/pron/index.js | Select-String "buildAzurePron"
+git commit -m "feat(pron): wire the spend cap into the factory; correct now-stale never-runtime comments"
+```
+
+---
+
+### Task 18: Document the slot in `server/.env.example`
 
 **Files:**
 - Modify: `server/.env.example`
@@ -3602,10 +4286,11 @@ git commit -m "feat(pron): typed degradation for sidecar and learner-side failur
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: documented env surface `PRON_PROVIDER`, `PRON_URL`, `PRON_TIMEOUT_MS`, plus commented
-  `PRON_MODEL`, `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, `AZURE_SPEECH_LOCALE`.
+- Produces: documented env surface `PRON_PROVIDER`, `PRON_URL`, `PRON_TIMEOUT_MS`,
+  `PRON_AZURE_MONTHLY_CAP_USD`, `PRON_AZURE_RATE_PER_HOUR_USD`, `PRON_BUDGET_STATE_FILE`, plus
+  commented `PRON_MODEL`, `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, `AZURE_SPEECH_LOCALE`.
 
-#### Step 15.1 — Edit
+#### Step 18.1 — Edit
 
 In `server/.env.example`, insert this block between the STT section (ends at
 `# STT_PROVIDER=voicebox`) and `# --- Voicebox ---`, separated by one blank line on each side:
@@ -3614,14 +4299,21 @@ In `server/.env.example`, insert this block between the STT section (ends at
 # --- Pronunciation (CAPT; consumed by POST /pron/assess) ---
 # mock   -> deterministic offline pseudo-scores, $0, no Docker (default)
 # local  -> score via the pronunciation sidecar container on :8899
-# azure  -> calibration reference only; never a runtime path
+# azure  -> a manually-selected, budget-capped supplement (design §13) — never
+#           the default, never auto-selected by key presence alone. Wrapped in
+#           a spend guard: once PRON_AZURE_MONTHLY_CAP_USD is met this month,
+#           calls silently fall back to mock (degrade, never break).
 PRON_PROVIDER=mock
 PRON_URL=http://localhost:8899
 PRON_TIMEOUT_MS=30000
+# --- Azure spend guard (only consulted when PRON_PROVIDER=azure) ---
+PRON_AZURE_MONTHLY_CAP_USD=12
+PRON_AZURE_RATE_PER_HOUR_USD=0.66
+PRON_BUDGET_STATE_FILE=.pron-budget.json
 # Read by the SIDECAR container, not by the Node server. Listed here so the
 # whole pron config lives in one place.
 # PRON_MODEL=facebook/wav2vec2-lv-60-espeak-cv-ft
-# AZURE_SPEECH_KEY=            # calibration runs only
+# AZURE_SPEECH_KEY=            # required to select PRON_PROVIDER=azure at all
 # AZURE_SPEECH_REGION=westeurope
 # AZURE_SPEECH_LOCALE=en-US
 ```
@@ -3630,17 +4322,17 @@ PRON_TIMEOUT_MS=30000
 with no Docker running. The spec's §4.1 sample shows `local`; §7's "PRON_PROVIDER unset → mock"
 governs the default.
 
-#### Step 15.2 — Verify the example is still parseable by Node's env loader
+#### Step 18.2 — Verify the example is still parseable by Node's env loader
 
 ```powershell
 Copy-Item server/.env.example $env:TEMP/pron-env-check.env -Force
-node --env-file=$env:TEMP/pron-env-check.env -e "console.log(process.env.PRON_PROVIDER, process.env.PRON_URL, process.env.PRON_TIMEOUT_MS)"
+node --env-file=$env:TEMP/pron-env-check.env -e "console.log(process.env.PRON_PROVIDER, process.env.PRON_URL, process.env.PRON_TIMEOUT_MS, process.env.PRON_AZURE_MONTHLY_CAP_USD, process.env.PRON_AZURE_RATE_PER_HOUR_USD, process.env.PRON_BUDGET_STATE_FILE)"
 Remove-Item $env:TEMP/pron-env-check.env
 ```
 
-Expected: `mock http://localhost:8899 30000`.
+Expected: `mock http://localhost:8899 30000 12 0.66 .pron-budget.json`.
 
-#### Step 15.3 — Verify the running server picks it up
+#### Step 18.3 — Verify the running server picks it up
 
 ```powershell
 Copy-Item server/.env.example server/.env -Force   # skip if server/.env already exists and you want to keep it
@@ -3667,20 +4359,22 @@ Expected, respectively: a body containing `"pron":"mock"`; a body whose `prompts
 `server/.env` is gitignored — confirm with `git status --short server/.env`, which must print
 nothing.
 
-#### Step 15.4 — Commit
+#### Step 18.4 — Commit
 
 ```powershell
 git add server/.env.example
-git show :server/.env.example | Select-String "PRON_PROVIDER=mock"
-git commit -m "docs(server): document the pronunciation env slot"
+git show :server/.env.example | Select-String "PRON_AZURE_MONTHLY_CAP_USD"
+git commit -m "docs(server): document the pronunciation env slot, including the azure spend cap"
 ```
 
 ---
 
-### Task 16: Close the milestone's server surface — full suite and coverage gate
+### Task 19: Close the milestone's server surface — full suite and coverage gate
 
-`server/vitest.config.js` sets 80 % thresholds over the six pron source files. This task proves the
-gate is met and that nothing untracked crept in.
+`server/vitest.config.js` sets 80 % thresholds over the nine pron source files (the original seven —
+`contract.js`, `index.js`, `local.js`, `mock.js`, `azure.js`, `prompts.js`, `routes/pron.js` — plus
+`budgetGuard.js` and `budgetCappedPron.js` from Tasks 15–16). This task proves the gate is met and
+that nothing untracked crept in.
 
 **Files:**
 - Modify: none expected. If coverage fails, modify the test file the report names.
@@ -3690,31 +4384,35 @@ gate is met and that nothing untracked crept in.
 - Consumes: everything built above.
 - Produces: nothing new.
 
-#### Step 16.1 — Run the coverage gate
+#### Step 19.1 — Run the coverage gate
 
 ```powershell
 npm --prefix server run test:coverage
 ```
 
-Expected: a table listing `src/pron/contract.js`, `src/pron/index.js`, `src/pron/local.js`,
-`src/pron/mock.js`, `src/pron/prompts.js`, `src/routes/pron.js`, every column ≥ 80, and no
+Expected: a table listing all nine files in `coverage.include` (`src/pron/contract.js`,
+`src/pron/index.js`, `src/pron/local.js`, `src/pron/mock.js`, `src/pron/azure.js`,
+`src/pron/prompts.js`, `src/pron/budgetGuard.js`, `src/pron/budgetCappedPron.js`,
+`src/routes/pron.js`), every column ≥ 80, and no
 `ERROR: Coverage for lines (…) does not meet global threshold (80%)` line.
 
 If a threshold fails, the report names the uncovered lines. Add the missing case to the
 corresponding `*.test.js` and re-run — do not lower the threshold and do not add the file to an
 exclude list.
 
-#### Step 16.2 — Run both suites the way CI would
+#### Step 19.2 — Run both suites the way CI would
 
 ```powershell
 npm test
 ```
 
-Expected: the server suite passes (`Tests  112 passed (112)`), then the client suite runs and its
-existing 93 tests still pass. The client suite is untouched by this chunk; a failure there means a
-sibling chunk's work is half-landed, not this one's.
+Expected: the server suite passes with zero failures (the exact total has drifted from every
+predicted figure in this plan without indicating a problem — do not treat a different number as a
+failure by itself), then the client suite runs and its existing 93 tests still pass. The client
+suite is untouched by this chunk; a failure there means a sibling chunk's work is half-landed, not
+this one's.
 
-#### Step 16.3 — Prove the working tree is clean
+#### Step 19.3 — Prove the working tree is clean
 
 ```powershell
 git status --short
@@ -3725,18 +4423,21 @@ chunks. **Nothing under `server/` may be untracked or modified.** If `server/` s
 find out which task's commit missed a path and amend that commit with the explicit path — this is
 exactly the failure mode design §11 records.
 
-#### Step 16.4 — No commit
+#### Step 19.4 — No commit
 
-This task produces no commit if everything passes. If Step 16.1 required a new test case:
+This task produces no commit if everything passes. If Step 19.1 required a new test case:
 
 ```powershell
 # Coverage can only be short in these six files. The report names one; map it to its test file:
-#   src/pron/contract.js -> server/src/pron/contract.test.js
-#   src/pron/index.js    -> server/src/pron/index.test.js
-#   src/pron/local.js    -> server/src/pron/local.test.js
-#   src/pron/mock.js     -> server/src/pron/mock.test.js
-#   src/pron/prompts.js  -> server/src/pron/prompts.test.js
-#   src/routes/pron.js   -> server/src/routes/pron.test.js
+#   src/pron/contract.js         -> server/src/pron/contract.test.js
+#   src/pron/index.js            -> server/src/pron/index.test.js
+#   src/pron/local.js            -> server/src/pron/local.test.js
+#   src/pron/mock.js             -> server/src/pron/mock.test.js
+#   src/pron/azure.js            -> server/src/pron/azure.test.js
+#   src/pron/prompts.js          -> server/src/pron/prompts.test.js
+#   src/pron/budgetGuard.js      -> server/src/pron/budgetGuard.test.js
+#   src/pron/budgetCappedPron.js -> server/src/pron/budgetCappedPron.test.js
+#   src/routes/pron.js           -> server/src/routes/pron.test.js
 # Example, for a gap reported in src/pron/contract.js:
 git add server/src/pron/contract.test.js
 git show :server/src/pron/contract.test.js | Select-String "it("
