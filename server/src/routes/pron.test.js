@@ -330,3 +330,109 @@ describe("POST /pron/assess — unscripted never carries phonemes (design §3)",
     expect(res.body.words[0].phones.length).toBeGreaterThan(0);
   });
 });
+
+function providerThrows(code, message = "boom") {
+  assess.mockRejectedValue(Object.assign(new Error(message), code ? { code } : {}));
+}
+
+describe("POST /pron/assess — degradation ladder (design §7)", () => {
+  async function scripted() {
+    return post(createApp())
+      .field("text", TEXT)
+      .attach("audio", AUDIO, { filename: "drill.webm" });
+  }
+
+  it("502s with PRON_UNAVAILABLE when the sidecar is unreachable", async () => {
+    providerThrows("PRON_UNAVAILABLE", "fetch failed");
+    const res = await scripted();
+    expect(res.status).toBe(502);
+    expect(res.body.error).toBe(
+      "Pronunciation scoring is offline. The drill continues as listen-and-repeat.",
+    );
+    expect(res.body.code).toBe("PRON_UNAVAILABLE");
+    expect(res.body.detail).toBe("fetch failed");
+    expect(console.error).toHaveBeenCalledWith("[pron/assess] provider error:", expect.any(Error));
+  });
+
+  it("502s with PRON_UNAVAILABLE when the failure carries no code at all", async () => {
+    providerThrows(undefined, "TypeError: nope");
+    const res = await scripted();
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe("PRON_UNAVAILABLE");
+  });
+
+  it("422s NO_SPEECH — silence is the learner's recording, not an outage", async () => {
+    providerThrows("NO_SPEECH", "sidecar says silence");
+    const res = await scripted();
+    expect(res.status).toBe(422);
+    expect(res.body).toEqual({
+      error: "Couldn't make out any speech in that recording.",
+      code: "NO_SPEECH",
+      detail: "sidecar says silence",
+    });
+  });
+
+  it("400s UNPRONOUNCEABLE_TEXT — the sentence is the problem, not the service", async () => {
+    providerThrows("UNPRONOUNCEABLE_TEXT", "no tokens for 'xyzzy'");
+    const res = await scripted();
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({
+      error: "Couldn't turn that sentence into phonemes. Try plain English words.",
+      code: "UNPRONOUNCEABLE_TEXT",
+      detail: "no tokens for 'xyzzy'",
+    });
+  });
+
+  it("502s a sidecar code the Node layer does not map", async () => {
+    providerThrows("DECODE_FAILED", "ffmpeg exit 1");
+    const res = await scripted();
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe("PRON_UNAVAILABLE");
+    expect(res.body.detail).toBe("ffmpeg exit 1");
+  });
+
+  it("502s BAD_REPORT when the provider returns something the contract rejects", async () => {
+    assess.mockResolvedValue({ version: 1, overall: {}, words: [] });
+    const res = await scripted();
+    expect(res.status).toBe(502);
+    expect(res.body.error).toBe("The pronunciation scorer returned an unreadable report.");
+    expect(res.body.code).toBe("BAD_REPORT");
+    expect(res.body.detail).toContain("report.overall");
+  });
+
+  it("502s BAD_REPORT when a provider emits substituted: null", async () => {
+    assess.mockResolvedValue({
+      version: 1,
+      mode: "scripted",
+      model: "rogue",
+      overall: { accuracy: 50, fluency: 50, completeness: 50 },
+      prosody: {
+        speechRateWpm: 100,
+        articulationRateSyllPerSec: 4,
+        pauseCount: 0,
+        pauseTotalSec: 0,
+        f0MinHz: null,
+        f0MaxHz: null,
+        f0RangeSemitones: null,
+      },
+      words: [
+        {
+          word: "sheep",
+          start: 0,
+          end: 1,
+          accuracy: 50,
+          phones: [{ ipa: "iː", score: 90, start: 0, end: 1, substituted: null }],
+        },
+      ],
+    });
+    const res = await scripted();
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe("BAD_REPORT");
+  });
+
+  it("logs exactly one provider error per failed request", async () => {
+    providerThrows("PRON_UNAVAILABLE");
+    await scripted();
+    expect(console.error).toHaveBeenCalledTimes(1);
+  });
+});

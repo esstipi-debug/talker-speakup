@@ -33,6 +33,22 @@ function uploadSingleAudio(req, res, next) {
 }
 
 /**
+ * Codes the sidecar raises about the *submission* rather than about itself.
+ * Anything absent from this table is an outage from the learner's point of
+ * view and degrades to listen-and-repeat (design §7).
+ */
+const PROVIDER_ERROR_RESPONSES = Object.freeze({
+  [PRON_ERROR_CODES.NO_SPEECH]: {
+    status: 422,
+    error: "Couldn't make out any speech in that recording.",
+  },
+  [PRON_ERROR_CODES.UNPRONOUNCEABLE_TEXT]: {
+    status: 400,
+    error: "Couldn't turn that sentence into phonemes. Try plain English words.",
+  },
+});
+
+/**
  * POST /pron/assess
  * multipart/form-data: audio (file), text (reference sentence), mode? ("scripted"|"unscripted")
  * resp: { version, mode, pronProvider, model, overall, prosody, words }
@@ -68,6 +84,14 @@ router.post("/assess", uploadSingleAudio, async (req, res) => {
     });
   } catch (err) {
     console.error("[pron/assess] provider error:", err);
+    const mapped = PROVIDER_ERROR_RESPONSES[err?.code];
+    if (mapped) {
+      return res.status(mapped.status).json({
+        error: mapped.error,
+        code: err.code,
+        detail: String(err?.message ?? err),
+      });
+    }
     return res.status(502).json({
       error: "Pronunciation scoring is offline. The drill continues as listen-and-repeat.",
       code: PRON_ERROR_CODES.PRON_UNAVAILABLE,
