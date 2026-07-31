@@ -79,3 +79,89 @@ def arpabet_to_ipa(phone: str) -> str:
 def ipa_to_arpabet(token: str) -> tuple[str, ...]:
     """ARPAbet phones covered by one espeak IPA token, `()` when unknown."""
     return IPA_TO_ARPABET.get(token.strip(), ())
+
+
+def expand_ipa(ipa_tokens: list[str]) -> tuple[list[str], list[int]]:
+    """Flatten IPA tokens into predicted ARPAbet phones plus an owner index.
+
+    An unknown token contributes exactly one `UNKNOWN_ARPABET` placeholder so
+    the surrounding tokens keep their positions.
+    """
+    predicted: list[str] = []
+    owners: list[int] = []
+    for index, token in enumerate(ipa_tokens):
+        mapped = ipa_to_arpabet(token) or (UNKNOWN_ARPABET,)
+        for phone in mapped:
+            predicted.append(phone)
+            owners.append(index)
+    return predicted, owners
+
+
+def _nw_align(
+    left: list[str],
+    right: list[str],
+    *,
+    match: int = 2,
+    mismatch: int = -1,
+    gap: int = -2,
+) -> list[tuple[int | None, int | None]]:
+    """Needleman-Wunsch. Returns (left_index, right_index) pairs; None = gap.
+
+    Traceback prefers diagonal, then up, then left, so the output is
+    deterministic for a given input.
+    """
+    rows, cols = len(left), len(right)
+    score = [[0] * (cols + 1) for _ in range(rows + 1)]
+    for i in range(1, rows + 1):
+        score[i][0] = score[i - 1][0] + gap
+    for j in range(1, cols + 1):
+        score[0][j] = score[0][j - 1] + gap
+    for i in range(1, rows + 1):
+        for j in range(1, cols + 1):
+            hit = match if left[i - 1] == right[j - 1] else mismatch
+            score[i][j] = max(
+                score[i - 1][j - 1] + hit,
+                score[i - 1][j] + gap,
+                score[i][j - 1] + gap,
+            )
+
+    pairs: list[tuple[int | None, int | None]] = []
+    i, j = rows, cols
+    while i > 0 or j > 0:
+        if i > 0 and j > 0:
+            hit = match if left[i - 1] == right[j - 1] else mismatch
+            if score[i][j] == score[i - 1][j - 1] + hit:
+                pairs.append((i - 1, j - 1))
+                i -= 1
+                j -= 1
+                continue
+        if i > 0 and score[i][j] == score[i - 1][j] + gap:
+            pairs.append((i - 1, None))
+            i -= 1
+            continue
+        pairs.append((None, j - 1))
+        j -= 1
+    pairs.reverse()
+    return pairs
+
+
+def align_ipa_to_arpabet(
+    ipa_tokens: list[str],
+    arpabet_phones: list[str],
+) -> list[tuple[int, ...]]:
+    """Per IPA token, the `arpabet_phones` indices it aligns to.
+
+    An empty tuple means the token aligned to nothing: it was inserted relative
+    to the corpus transcription, or the table does not know it. Callers MUST
+    skip those tokens rather than invent a human score for them.
+    """
+    predicted, owners = expand_ipa(ipa_tokens)
+    actual = [strip_stress(phone) for phone in arpabet_phones]
+    owned: list[list[int]] = [[] for _ in ipa_tokens]
+    for left_index, right_index in _nw_align(predicted, actual):
+        if left_index is None or right_index is None:
+            continue
+        if predicted[left_index] == UNKNOWN_ARPABET:
+            continue
+        owned[owners[left_index]].append(right_index)
+    return [tuple(indices) for indices in owned]

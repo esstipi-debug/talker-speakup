@@ -8,7 +8,9 @@ from arpabet_ipa import (  # noqa: E402
     ARPABET_PHONES,
     ARPABET_TO_IPA,
     IPA_TO_ARPABET,
+    align_ipa_to_arpabet,
     arpabet_to_ipa,
+    expand_ipa,
     ipa_to_arpabet,
     strip_stress,
 )
@@ -58,3 +60,48 @@ def test_every_mapped_arpabet_phone_is_a_real_arpabet_phone():
         assert phones, f"{token} maps to nothing"
         for phone in phones:
             assert phone in ARPABET_PHONES, f"{token} -> {phone} is not ARPAbet"
+
+
+def test_expand_ipa_records_the_owning_token_per_phone():
+    predicted, owners = expand_ipa(["k", "ɑːɹ"])
+    assert predicted == ["K", "AA", "R"]
+    assert owners == [0, 1, 1]
+
+
+def test_expand_ipa_marks_unknown_tokens_without_dropping_them():
+    predicted, owners = expand_ipa(["s", "QQQ", "t"])
+    assert predicted == ["S", "??", "T"]
+    assert owners == [0, 1, 2]
+
+
+def test_align_pairs_one_to_one_when_the_sequences_agree():
+    assert align_ipa_to_arpabet(
+        ["ð", "ə", "ʃ", "iː", "p"],
+        ["DH", "AH0", "SH", "IY1", "P"],
+    ) == [(0,), (1,), (2,), (3,), (4,)]
+
+
+def test_align_gives_a_multi_phone_unit_both_of_its_slots():
+    assert align_ipa_to_arpabet(["k", "ɑːɹ"], ["K", "AA1", "R"]) == [(0,), (1, 2)]
+
+
+def test_align_leaves_a_deleted_phone_unowned():
+    # espeak says "stopped" is /s t ɑː p t/; the corpus canonical is S T AA P.
+    assert align_ipa_to_arpabet(
+        ["s", "t", "ɑː", "p", "t"],
+        ["S", "T", "AA1", "P"],
+    ) == [(0,), (1,), (2,), (3,), ()]
+
+
+def test_align_keeps_neighbours_in_step_across_an_unknown_token():
+    assert align_ipa_to_arpabet(["s", "QQQ", "t"], ["S", "AH0", "T"]) == [(0,), (), (2,)]
+
+
+def test_align_still_pairs_a_substituted_phone():
+    # A wrong-but-present phone must stay paired: the human scored that slot.
+    assert align_ipa_to_arpabet(["ʃ", "ɪ", "p"], ["SH", "IY1", "P"]) == [(0,), (1,), (2,)]
+
+
+def test_align_of_empty_inputs_is_empty():
+    assert align_ipa_to_arpabet([], ["S"]) == []
+    assert align_ipa_to_arpabet(["s"], []) == [()]
