@@ -16,6 +16,7 @@ export default defineConfig({
         "src/pron/local.js",
         "src/pron/azure.js",
         "src/pron/prompts.js",
+        "src/pron/budgetGuard.js",
         "src/routes/pron.js",
       ],
       thresholds: { lines: 80, functions: 80, branches: 80, statements: 80 },

@@ -13,6 +13,7 @@ client/coverage/
 .env
 **/.env
 !**/.env.example
+server/.pron-budget.json
 
 # sqlite database (local, single-user)
 server/prisma/dev.db
