@@ -97,3 +97,72 @@ describe("recorder — failure paths", () => {
     expect(lastMicTrack().stop).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("recorder — races", () => {
+  it("stop() is idempotent: the second call resolves null and does not re-stop", async () => {
+    const handle = await startRecording();
+    lastRecorder().emitData(new Blob(["abc"]));
+    const first = await handle.stop();
+    expect(first.blob.size).toBe(3);
+    await expect(handle.stop()).resolves.toBeNull();
+    expect(lastRecorder().stopped).toBe(1);
+  });
+
+  it("cancel() discards the take, releases the mic, and makes a later stop() resolve null", async () => {
+    const handle = await startRecording();
+    lastRecorder().emitData(new Blob(["abc"]));
+    handle.cancel();
+    expect(handle.state()).toBe("cancelled");
+    expect(lastMicTrack().stop).toHaveBeenCalledTimes(1);
+    await expect(handle.stop()).resolves.toBeNull();
+  });
+
+  it("cancel() is idempotent", async () => {
+    const handle = await startRecording();
+    handle.cancel();
+    handle.cancel();
+    expect(lastMicTrack().stop).toHaveBeenCalledTimes(1);
+    expect(lastRecorder().stopped).toBe(1);
+  });
+
+  it("cancel() racing an in-flight stop() resolves that stop() with null", async () => {
+    const handle = await startRecording();
+    lastRecorder().emitData(new Blob(["abc"]));
+    const pending = handle.stop(); // recorder.stop() queued its onstop microtask
+    handle.cancel(); // lands synchronously, before onstop runs
+    await expect(pending).resolves.toBeNull();
+  });
+
+  it("auto-stops at maxMs, notifies, and still hands the take to a later stop()", async () => {
+    // Fake timers must be installed before startRecording, because the cap timer
+    // is armed inside it. No waitFor runs under them, so this is safe.
+    vi.useFakeTimers();
+    try {
+      const onAutoStop = vi.fn();
+      const handle = await startRecording({ maxMs: 500, onAutoStop });
+      lastRecorder().emitData(new Blob(["abcd"]));
+      vi.advanceTimersByTime(500);
+      expect(onAutoStop).toHaveBeenCalledTimes(1);
+      expect(handle.state()).toBe("stopped");
+      const take = await handle.stop();
+      expect(take.blob.size).toBe(4);
+      expect(lastRecorder().stopped).toBe(1); // the cap stopped it, stop() did not re-stop
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not fire the cap after a manual stop", async () => {
+    vi.useFakeTimers();
+    try {
+      const onAutoStop = vi.fn();
+      const handle = await startRecording({ maxMs: 500, onAutoStop });
+      lastRecorder().emitData(new Blob(["abcd"]));
+      await handle.stop();
+      vi.advanceTimersByTime(5000);
+      expect(onAutoStop).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
