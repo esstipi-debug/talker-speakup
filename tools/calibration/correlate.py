@@ -16,8 +16,10 @@ Usage:
 
 from __future__ import annotations
 
+import csv
 import math
 from dataclasses import dataclass
+from pathlib import Path
 
 from scipy import stats
 
@@ -78,3 +80,72 @@ def correlate(xs: list[float], ys: list[float]) -> Correlation:
         spearman_rho=round(float(spearman[0]), 6),
         spearman_p=round(float(spearman[1]), 6),
     )
+
+
+#: Columns run_calibration.py writes and this module reads. A CSV that lacks any
+#: of them is rejected loudly — a silently-missing column would just produce an
+#: empty, plausible-looking report.
+REQUIRED_COLUMNS = (
+    "model",
+    "level",
+    "utt_id",
+    "word_index",
+    "phone_index",
+    "ipa",
+    "arpabet",
+    "human",
+    "machine",
+    "human_sub",
+    "machine_sub",
+    "machine_sub_arpabet",
+    "error_code",
+)
+
+
+def load_rows(path: Path) -> list[dict[str, str]]:
+    """Read one score CSV. Raises ValueError when a required column is absent."""
+    with Path(path).open("r", newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        header = reader.fieldnames or []
+        for column in REQUIRED_COLUMNS:
+            if column not in header:
+                raise ValueError(f"{path}: missing column {column!r}")
+        return [dict(row) for row in reader]
+
+
+def models(rows: list[dict[str, str]]) -> list[str]:
+    """Every model label present in the rows, sorted for a stable report."""
+    return sorted({row["model"] for row in rows if row["model"]})
+
+
+def coverage(rows: list[dict[str, str]], model: str) -> float:
+    """Scored utterances / attempted utterances for one model, 0.0 when none."""
+    scored = 0
+    failed = 0
+    for row in rows:
+        if row["model"] != model:
+            continue
+        if row["level"] == "utterance" and row["machine"].strip():
+            scored += 1
+        elif row["level"] == "error":
+            failed += 1
+    attempted = scored + failed
+    return scored / attempted if attempted else 0.0
+
+
+def pairs(
+    rows: list[dict[str, str]],
+    model: str,
+    level: str,
+) -> tuple[list[float], list[float]]:
+    """(human, machine) score series for one model at one level."""
+    human: list[float] = []
+    machine: list[float] = []
+    for row in rows:
+        if row["model"] != model or row["level"] != level:
+            continue
+        if not row["human"].strip() or not row["machine"].strip():
+            continue
+        human.append(float(row["human"]))
+        machine.append(float(row["machine"]))
+    return human, machine
