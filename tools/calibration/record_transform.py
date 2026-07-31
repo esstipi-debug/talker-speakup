@@ -40,15 +40,21 @@ def phoneme_rows(
     human_word: dict,
     machine_word: dict,
 ) -> list[dict]:
-    """One row per (machine phone, human phone) pairing for a single word.
+    """One row per (machine phone, human phone) pairing for a single word, PLUS one row
+    for every human phone the alignment never touched at all.
 
-    A multi-phone espeak unit (one machine phone covering two human phones)
-    produces two rows that share the same machine score but keep their own
-    distinct human ground truth -- never averaged, never dropped. A machine
-    phone that aligns to nothing (an insertion relative to the corpus
-    transcription) contributes no row: there is no human score to compare it
-    against, and inventing one would be exactly the false precision design
-    section 10's fallback exists to avoid.
+    A multi-phone espeak unit (one machine phone covering two human phones) still
+    produces two rows sharing the same machine SCORE -- that is intentional, both
+    phones were genuinely scored by that one unit. But its `substituted` flag names
+    exactly ONE detected event, so it is attributed to exactly one of those rows (the
+    rater-flagged index when there is one, otherwise the first), never duplicated --
+    duplicating it would manufacture a false positive on every other row in the group.
+
+    A human phone with no machine pairing at all (the model dropped it) gets its own
+    row with a blank `ipa`/`machine` -- pairs() already skips rows with a blank
+    `machine` value, so phoneme-level correlation is unaffected, but
+    substitution_agreement() now correctly counts a rater-flagged dropped phone as a
+    false negative instead of it silently vanishing.
     """
     human_phones = human_word.get("phones", [])
     human_scores = human_word.get("phones-accuracy", [])
@@ -57,13 +63,22 @@ def phoneme_rows(
     machine_ipa = [phone["ipa"] for phone in machine_phones]
 
     alignment = align_ipa_to_arpabet(machine_ipa, human_phones)
+    paired_human_indices: set[int] = set()
     rows: list[dict] = []
+
     for machine_index, human_indices in enumerate(alignment):
         machine_phone = machine_phones[machine_index]
         substituted_ipa = machine_phone.get("substituted")
         machine_sub_arpabet = "+".join(ipa_to_arpabet(substituted_ipa)) if substituted_ipa else ""
+        attribution_index = None
+        if substituted_ipa and human_indices:
+            attribution_index = next(
+                (i for i in human_indices if i in human_subs), human_indices[0]
+            )
         for human_index in human_indices:
+            paired_human_indices.add(human_index)
             sub_entry = human_subs.get(human_index)
+            is_attributed = human_index == attribution_index
             rows.append(
                 {
                     **BLANK_ROW,
@@ -77,10 +92,28 @@ def phoneme_rows(
                     "human": str(human_scores[human_index]),
                     "machine": str(machine_phone["score"]),
                     "human_sub": strip_stress(sub_entry["pronounced-phone"]) if sub_entry else "",
-                    "machine_sub": substituted_ipa or "",
-                    "machine_sub_arpabet": machine_sub_arpabet,
+                    "machine_sub": substituted_ipa if is_attributed else "",
+                    "machine_sub_arpabet": machine_sub_arpabet if is_attributed else "",
                 }
             )
+
+    for human_index in range(len(human_phones)):
+        if human_index in paired_human_indices:
+            continue
+        sub_entry = human_subs.get(human_index)
+        rows.append(
+            {
+                **BLANK_ROW,
+                "model": model,
+                "level": "phoneme",
+                "utt_id": utt_id,
+                "word_index": str(word_index),
+                "phone_index": str(human_index),
+                "arpabet": strip_stress(human_phones[human_index]),
+                "human": str(human_scores[human_index]),
+                "human_sub": strip_stress(sub_entry["pronounced-phone"]) if sub_entry else "",
+            }
+        )
     return rows
 
 

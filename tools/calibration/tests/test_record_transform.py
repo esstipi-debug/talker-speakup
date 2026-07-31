@@ -117,6 +117,46 @@ def test_phoneme_rows_skips_a_machine_phone_that_aligns_to_nothing():
     assert len(rows) == 2
 
 
+def test_phoneme_rows_counts_a_dropped_human_phone_as_a_false_negative_candidate():
+    # The model dropped "R" entirely -- no machine phone aligns to human index 2.
+    human_word = {
+        "phones": ["S", "T", "R"],
+        "phones-accuracy": [2.0, 2.0, 0.0],
+        "mispronunciations": [{"index": 2, "canonical-phone": "R", "pronounced-phone": ""}],
+    }
+    machine_word = {"phones": [{"ipa": "s", "score": 90}, {"ipa": "t", "score": 90}]}
+    rows = phoneme_rows("facebook", "test-drop", 0, human_word, machine_word)
+    assert len(rows) == 3  # was 2 before the fix
+    dropped = next(r for r in rows if r["phone_index"] == "2")
+    assert dropped["ipa"] == ""
+    assert dropped["machine"] == ""
+    assert dropped["arpabet"] == "R"
+    assert dropped["human"] == "0.0"
+    assert dropped["human_sub"] == ""  # pronounced-phone was empty in this fixture
+
+
+def test_phoneme_rows_attributes_a_multi_phone_substitution_to_only_one_human_phone():
+    human_word = {"phones": ["K", "AA1", "R"], "phones-accuracy": [2.0, 1.0, 0.0], "mispronunciations": []}
+    machine_word = {"phones": [{"ipa": "k", "score": 90}, {"ipa": "ɑːɹ", "score": 40, "substituted": "l"}]}
+    rows = phoneme_rows("facebook", "test-fanout", 0, human_word, machine_word)
+    subbed = [r for r in rows if r["machine_sub"]]
+    assert len(subbed) == 1  # was 2 before the fix
+    blank_sub = [r for r in rows if r["ipa"] == "ɑːɹ" and not r["machine_sub"]]
+    assert len(blank_sub) == 1
+
+
+def test_phoneme_rows_prefers_the_rater_flagged_index_for_a_multi_phone_substitution():
+    human_word = {
+        "phones": ["K", "AA1", "R"],
+        "phones-accuracy": [2.0, 1.0, 0.0],
+        "mispronunciations": [{"index": 2, "canonical-phone": "R", "pronounced-phone": "L"}],
+    }
+    machine_word = {"phones": [{"ipa": "k", "score": 90}, {"ipa": "ɑːɹ", "score": 40, "substituted": "l"}]}
+    rows = phoneme_rows("facebook", "test-fanout-attrib", 0, human_word, machine_word)
+    subbed = next(r for r in rows if r["machine_sub"])
+    assert subbed["phone_index"] == "2"  # the rater's own flagged index, not the first index
+
+
 def test_build_utterance_rows_combines_the_utterance_row_and_every_words_phoneme_rows():
     human_record = {
         "accuracy": 8,

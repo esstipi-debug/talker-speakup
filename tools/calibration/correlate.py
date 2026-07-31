@@ -32,6 +32,11 @@ from arpabet_ipa import strip_stress
 #: flattering r for reasons that have nothing to do with quality.
 PASS_MIN_COVERAGE = 0.80
 
+#: Analogous to PASS_MIN_COVERAGE but at the phoneme level: a model whose alignment
+#: only covers the easy fraction of phones has a flattering substitution/correlation
+#: metric for the wrong reason (design section 10's "no false precision" principle).
+PASS_MIN_PHONEME_COVERAGE = 0.80
+
 #: Utterance-level Pearson r required to show numeric scores to a learner.
 PASS_MIN_UTTERANCE_PEARSON = 0.60
 
@@ -137,6 +142,20 @@ def coverage(rows: list[dict[str, str]], model: str) -> float:
     return scored / attempted if attempted else 0.0
 
 
+def phoneme_coverage(rows: list[dict[str, str]], model: str) -> float:
+    """Fraction of this model's phoneme-level rows that received an actual machine
+    pairing (non-blank "machine"). 0.0 when there are no phoneme rows at all."""
+    total = 0
+    paired = 0
+    for row in rows:
+        if row["model"] != model or row["level"] != "phoneme":
+            continue
+        total += 1
+        if row["machine"].strip():
+            paired += 1
+    return paired / total if total else 0.0
+
+
 def pairs(
     rows: list[dict[str, str]],
     model: str,
@@ -172,6 +191,7 @@ class SubstitutionAgreement:
     f1: float
     identity_matches: int
     identity_accuracy: float
+    unmapped_substitutions: int
 
 
 def substitution_agreement(
@@ -183,6 +203,7 @@ def substitution_agreement(
     false_positives = 0
     false_negatives = 0
     identity_matches = 0
+    unmapped_substitutions = 0
     for row in rows:
         if row["model"] != model or row["level"] != "phoneme":
             continue
@@ -193,7 +214,12 @@ def substitution_agreement(
             predicted = [
                 phone for phone in row["machine_sub_arpabet"].split("+") if phone
             ]
-            if strip_stress(human) in predicted:
+            if not predicted:
+                # An espeak `substituted` token IPA_TO_ARPABET does not know (e.g. a
+                # tap "ɾ") -- a real detection, but a table gap, not a model error.
+                # Excluded from the identity denominator below, not counted a miss.
+                unmapped_substitutions += 1
+            elif strip_stress(human) in predicted:
                 identity_matches += 1
         elif machine:
             false_positives += 1
@@ -211,7 +237,8 @@ def substitution_agreement(
         else 0.0
     )
     f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
-    identity_accuracy = identity_matches / true_positives if true_positives else 0.0
+    identity_denominator = true_positives - unmapped_substitutions
+    identity_accuracy = identity_matches / identity_denominator if identity_denominator else 0.0
     return SubstitutionAgreement(
         true_positives=true_positives,
         false_positives=false_positives,
@@ -221,6 +248,7 @@ def substitution_agreement(
         f1=round(f1, 6),
         identity_matches=identity_matches,
         identity_accuracy=round(identity_accuracy, 6),
+        unmapped_substitutions=unmapped_substitutions,
     )
 
 
@@ -234,6 +262,7 @@ class ModelVerdict:
 
     model: str
     coverage: float
+    phoneme_coverage: float
     levels: dict[str, Correlation]
     substitutions: SubstitutionAgreement
     verdict: str
@@ -249,6 +278,7 @@ def judge(rows: list[dict[str, str]], model: str) -> ModelVerdict:
     correlation gates, then the design §10 substitutions-only fallback.
     """
     model_coverage = round(coverage(rows, model), 6)
+    model_phoneme_coverage = round(phoneme_coverage(rows, model), 6)
     levels: dict[str, Correlation] = {}
     for level in sorted(
         {row["level"] for row in rows if row["model"] == model and row["level"] != "error"}
@@ -265,6 +295,23 @@ def judge(rows: list[dict[str, str]], model: str) -> ModelVerdict:
         return ModelVerdict(
             model=model,
             coverage=model_coverage,
+            phoneme_coverage=model_phoneme_coverage,
+            levels=levels,
+            substitutions=subs,
+            verdict="DISQUALIFIED",
+            show_numeric_scores=False,
+            reasons=tuple(reasons),
+        )
+
+    if model_phoneme_coverage < PASS_MIN_PHONEME_COVERAGE:
+        reasons.append(
+            f"phoneme coverage {model_phoneme_coverage:.2f} < {PASS_MIN_PHONEME_COVERAGE:.2f} "
+            "— too many phones went unaligned to trust substitution/phoneme metrics"
+        )
+        return ModelVerdict(
+            model=model,
+            coverage=model_coverage,
+            phoneme_coverage=model_phoneme_coverage,
             levels=levels,
             substitutions=subs,
             verdict="DISQUALIFIED",
@@ -299,6 +346,7 @@ def judge(rows: list[dict[str, str]], model: str) -> ModelVerdict:
         return ModelVerdict(
             model=model,
             coverage=model_coverage,
+            phoneme_coverage=model_phoneme_coverage,
             levels=levels,
             substitutions=subs,
             verdict="PASS",
@@ -314,6 +362,7 @@ def judge(rows: list[dict[str, str]], model: str) -> ModelVerdict:
         return ModelVerdict(
             model=model,
             coverage=model_coverage,
+            phoneme_coverage=model_phoneme_coverage,
             levels=levels,
             substitutions=subs,
             verdict="SUBSTITUTIONS_ONLY",
@@ -325,6 +374,7 @@ def judge(rows: list[dict[str, str]], model: str) -> ModelVerdict:
     return ModelVerdict(
         model=model,
         coverage=model_coverage,
+        phoneme_coverage=model_phoneme_coverage,
         levels=levels,
         substitutions=subs,
         verdict="FAIL",
@@ -377,6 +427,7 @@ def format_report(verdicts: list[ModelVerdict]) -> str:
         lines.append(f"=== {verdict.model} — {verdict.verdict} ===")
         lines.append(
             f"  coverage {verdict.coverage:.3f}"
+            f"   phoneme coverage {verdict.phoneme_coverage:.3f}"
             f"   numeric scores: {'show' if verdict.show_numeric_scores else 'HIDE'}"
         )
         for level in sorted(verdict.levels):
@@ -391,6 +442,7 @@ def format_report(verdicts: list[ModelVerdict]) -> str:
             f"  substitutions  tp={subs.true_positives} fp={subs.false_positives}"
             f" fn={subs.false_negatives} f1={subs.f1:.3f}"
             f" identity={subs.identity_accuracy:.3f}"
+            f" unmapped={subs.unmapped_substitutions}"
         )
         for reason in verdict.reasons:
             lines.append(f"  - {reason}")
