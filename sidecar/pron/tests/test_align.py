@@ -100,6 +100,22 @@ def test_align_sequence_raises_no_speech_when_the_audio_is_shorter_than_the_tran
     assert excinfo.value.status == 422
 
 
+def test_align_sequence_raises_no_speech_when_forced_align_fails_due_to_ctc_constraints():
+    """Regression: test the except RuntimeError branch in align_sequence.
+
+    Adjacent repeated tokens (e.g. [1, 1]) require a separating blank frame in CTC.
+    With only 2 frames and target [1, 1], the upfront check (frames >= len(tokens))
+    passes (2 >= 2), but torchaudio.functional.forced_align raises RuntimeError
+    internally because the minimum requirement is 3 frames (blank, 1, blank, 1, blank
+    or similar). This test exercises the real torchaudio failure path, not the upfront guard.
+    """
+    log_probs = _peaky_log_probs(2, 5, [1, 1])
+    with pytest.raises(PronError) as excinfo:
+        align_sequence(log_probs, [1, 1], blank=0)
+    assert excinfo.value.code == "NO_SPEECH"
+    assert excinfo.value.status == 422
+
+
 def test_align_sequence_rejects_an_empty_target():
     with pytest.raises(PronError) as excinfo:
         align_sequence(_peaky_log_probs(4, 5, [0, 0, 0, 0]), [], blank=0)
