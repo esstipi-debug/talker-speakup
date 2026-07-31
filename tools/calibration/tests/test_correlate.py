@@ -22,6 +22,9 @@ from correlate import (  # noqa: E402
     ModelVerdict,
     judge,
     select_model,
+    format_report,
+    main,
+    verdict_to_dict,
 )
 
 
@@ -292,3 +295,58 @@ def test_select_model_returns_none_when_every_candidate_failed():
     )
     assert failed.verdict == "FAIL"
     assert select_model([failed]) is None
+
+
+import json  # noqa: E402
+
+
+def test_verdict_to_dict_is_json_safe():
+    verdict = judge(_utterance_rows("a", 5) + _phoneme_rows("a", 5), "a")
+    payload = verdict_to_dict(verdict)
+    encoded = json.dumps(payload)  # would raise on a NaN if we left one in
+    assert '"model": "a"' in encoded
+    assert payload["levels"]["utterance"]["n"] == 5
+    assert payload["verdict"] == verdict.verdict
+
+
+def test_format_report_names_every_model_and_its_verdict():
+    strong = judge(_utterance_rows("facebook", 40) + _phoneme_rows("facebook", 40), "facebook")
+    weak = judge(
+        _utterance_rows("mrrubino", 40, invert=True) + _phoneme_rows("mrrubino", 40, invert=True),
+        "mrrubino",
+    )
+    text = format_report([strong, weak])
+    assert "facebook" in text
+    assert "mrrubino" in text
+    assert "PASS" in text
+    assert "FAIL" in text
+    assert "coverage" in text
+
+
+def test_main_writes_a_verdict_file_and_exits_zero_on_a_selection(tmp_path, capsys):
+    rows = _utterance_rows("facebook", 40) + _phoneme_rows("facebook", 40)
+    path = _write_csv(tmp_path, rows)
+    out = tmp_path / "verdict.json"
+
+    code = main([str(path), "--out", str(out)])
+
+    assert code == 0
+    printed = capsys.readouterr().out
+    assert "SELECTED: facebook" in printed
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["selected"] == "facebook"
+    assert payload["showNumericScores"] is True
+    assert payload["thresholds"]["passMinUtterancePearson"] == 0.6
+    assert payload["models"][0]["model"] == "facebook"
+
+
+def test_main_exits_one_when_no_model_is_selectable(tmp_path, capsys):
+    rows = _utterance_rows("facebook", 40, invert=True) + _phoneme_rows(
+        "facebook", 40, invert=True
+    )
+    path = _write_csv(tmp_path, rows)
+
+    code = main([str(path), "--out", str(tmp_path / "verdict.json")])
+
+    assert code == 1
+    assert "SELECTED: none" in capsys.readouterr().out

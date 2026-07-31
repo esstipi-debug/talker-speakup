@@ -16,9 +16,11 @@ Usage:
 
 from __future__ import annotations
 
+import argparse
 import csv
+import json
 import math
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from scipy import stats
@@ -350,3 +352,100 @@ def select_model(verdicts: list[ModelVerdict]) -> ModelVerdict | None:
         return (VERDICT_RANK[verdict.verdict], -r, verdict.model)
 
     return sorted(eligible, key=sort_key)[0]
+
+
+def _jsonable(value):
+    """Recursively replace non-finite floats with None so json.dumps stays strict."""
+    if isinstance(value, float):
+        return None if math.isnan(value) or math.isinf(value) else value
+    if isinstance(value, dict):
+        return {key: _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    return value
+
+
+def verdict_to_dict(verdict: ModelVerdict) -> dict:
+    """JSON-safe view of a ModelVerdict (NaN correlations become null)."""
+    return _jsonable(asdict(verdict))
+
+
+def format_report(verdicts: list[ModelVerdict]) -> str:
+    """Human-readable calibration report, one block per model."""
+    lines: list[str] = []
+    for verdict in verdicts:
+        lines.append(f"=== {verdict.model} — {verdict.verdict} ===")
+        lines.append(
+            f"  coverage {verdict.coverage:.3f}"
+            f"   numeric scores: {'show' if verdict.show_numeric_scores else 'HIDE'}"
+        )
+        for level in sorted(verdict.levels):
+            correlation = verdict.levels[level]
+            lines.append(
+                f"  {level:<13} n={correlation.n:<6}"
+                f" pearson r={correlation.pearson_r:.3f} (p={correlation.pearson_p:.4f})"
+                f" spearman rho={correlation.spearman_rho:.3f} (p={correlation.spearman_p:.4f})"
+            )
+        subs = verdict.substitutions
+        lines.append(
+            f"  substitutions  tp={subs.true_positives} fp={subs.false_positives}"
+            f" fn={subs.false_negatives} f1={subs.f1:.3f}"
+            f" identity={subs.identity_accuracy:.3f}"
+        )
+        for reason in verdict.reasons:
+            lines.append(f"  - {reason}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI entry point. Exit 0 when a model was selected, 1 when none was."""
+    parser = argparse.ArgumentParser(
+        description="Correlate sidecar pronunciation scores against speechocean762 human scores."
+    )
+    parser.add_argument(
+        "csv_paths",
+        nargs="+",
+        type=Path,
+        help="one or more score CSVs written by run_calibration.py",
+    )
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="verdict JSON path (default: verdict.json beside the first CSV)",
+    )
+    args = parser.parse_args(argv)
+
+    rows: list[dict[str, str]] = []
+    for path in args.csv_paths:
+        rows.extend(load_rows(path))
+
+    verdicts = [judge(rows, model) for model in models(rows)]
+    chosen = select_model(verdicts)
+
+    print(format_report(verdicts))
+    print(f"SELECTED: {chosen.model if chosen else 'none'}")
+
+    out = args.out or args.csv_paths[0].with_name("verdict.json")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "selected": chosen.model if chosen else None,
+        "showNumericScores": bool(chosen and chosen.show_numeric_scores),
+        "thresholds": {
+            "passMinCoverage": PASS_MIN_COVERAGE,
+            "passMinUtterancePearson": PASS_MIN_UTTERANCE_PEARSON,
+            "passMinPhonemeSpearman": PASS_MIN_PHONEME_SPEARMAN,
+            "fallbackMinSubstitutionF1": FALLBACK_MIN_SUBSTITUTION_F1,
+            "minSamples": MIN_SAMPLES,
+        },
+        "models": [verdict_to_dict(verdict) for verdict in verdicts],
+    }
+    out.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    return 0 if chosen else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
