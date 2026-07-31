@@ -359,3 +359,117 @@ describe("usePronunciationDrill — degradation", () => {
     expect(postPronAssess).not.toHaveBeenCalled();
   });
 });
+
+describe("usePronunciationDrill — races", () => {
+  it("does not write state after unmounting mid-scoring", async () => {
+    let settle;
+    postPronAssess.mockImplementationOnce(() => new Promise((resolve) => { settle = resolve; }));
+    const errorSpy = vi.spyOn(console, "error");
+    try {
+      const { result, unmount } = await mounted();
+      act(() => { result.current.startRecording(); });
+      await waitFor(() => expect(result.current.status).toBe("recording"));
+      act(() => { result.current.stopRecording(); });
+      await waitFor(() => expect(result.current.status).toBe("scoring"));
+
+      unmount();
+      await act(async () => {
+        settle(REPORT);
+      });
+
+      // No "state update on an unmounted component" warning, and the last
+      // rendered snapshot never advanced past `scoring`.
+      expect(errorSpy).not.toHaveBeenCalled();
+      expect(result.current.status).toBe("scoring");
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("cancels the live recorder when the component unmounts mid-take", async () => {
+    const { result, unmount } = await mounted();
+    act(() => { result.current.startRecording(); });
+    await waitFor(() => expect(result.current.status).toBe("recording"));
+    const handle = lastHandle;
+    unmount();
+    expect(handle.cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("discards a stale response when the take was cancelled and restarted", async () => {
+    const slow = { ...REPORT, overall: { ...REPORT.overall, accuracy: 11 } };
+    let settleSlow;
+    postPronAssess.mockImplementationOnce(() => new Promise((resolve) => { settleSlow = resolve; }));
+
+    const { result } = await mounted();
+    act(() => { result.current.startRecording(); });
+    await waitFor(() => expect(result.current.status).toBe("recording"));
+    act(() => { result.current.stopRecording(); });
+    await waitFor(() => expect(result.current.status).toBe("scoring"));
+
+    // A fresh take starts (attemptSeq moves) before the first response lands.
+    // `scoring` blocks startRecording, so the learner reaches it via the guard-free
+    // path the UI actually offers: the request is invalidated by the next attempt.
+    act(() => result.current.selectPrompt("v-b-01"));
+    await waitFor(() => expect(result.current.prompt.id).toBe("v-b-01"));
+    act(() => { result.current.startRecording(); });
+    await waitFor(() => expect(result.current.status).toBe("recording"));
+
+    await act(async () => {
+      settleSlow(slow);
+    });
+
+    expect(result.current.report).toBeNull(); // the stale 11 never landed
+    expect(result.current.status).toBe("recording");
+  });
+
+  it("cancelRecording releases the mic and returns to the prompt", async () => {
+    const { result } = await mounted();
+    act(() => { result.current.startRecording(); });
+    await waitFor(() => expect(result.current.status).toBe("recording"));
+    const handle = lastHandle;
+
+    act(() => result.current.cancelRecording());
+
+    expect(handle.cancel).toHaveBeenCalledTimes(1);
+    expect(result.current.status).toBe("prompt");
+    expect(result.current.error).toBeNull();
+    expect(handle.stop).not.toHaveBeenCalled();
+  });
+
+  it("cancelling while the permission prompt is open releases the late handle", async () => {
+    // startRecording sets `recording` before awaiting getUserMedia, so a cancel
+    // can land first. The handle must be released, not adopted.
+    const { result } = await mounted();
+    act(() => {
+      result.current.startRecording();
+      result.current.cancelRecording();
+    });
+    await waitFor(() => expect(result.current.status).toBe("prompt"));
+    await waitFor(() => expect(lastHandle.cancel).toHaveBeenCalledTimes(1));
+    expect(result.current.status).toBe("prompt");
+  });
+
+  it("a second stopRecording tap during scoring is a no-op", async () => {
+    const { result } = await mounted();
+    act(() => { result.current.startRecording(); });
+    await waitFor(() => expect(result.current.status).toBe("recording"));
+    act(() => {
+      result.current.stopRecording();
+      result.current.stopRecording();
+    });
+    await waitFor(() => expect(result.current.status).toBe("result"));
+    expect(lastHandle.stop).toHaveBeenCalledTimes(1);
+    expect(postPronAssess).toHaveBeenCalledTimes(1);
+  });
+
+  it("the recorder's own cap drives a stop through the same path", async () => {
+    const { result } = await mounted();
+    act(() => { result.current.startRecording(); });
+    await waitFor(() => expect(result.current.status).toBe("recording"));
+
+    act(() => { lastStartOpts.onAutoStop(); });
+
+    await waitFor(() => expect(result.current.status).toBe("result"));
+    expect(lastHandle.stop).toHaveBeenCalledTimes(1);
+  });
+});

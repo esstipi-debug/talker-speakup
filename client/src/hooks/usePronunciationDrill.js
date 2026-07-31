@@ -52,13 +52,23 @@ export function usePronunciationDrill({ focus = null } = {}) {
   useEffect(() => { promptRef.current = prompt; }, [prompt]);
   useEffect(() => { promptsRef.current = prompts; }, [prompts]);
 
+  // Mirrors `status` into `statusRef` synchronously, at the same call site as
+  // the state update. The useEffect mirror above runs after a render commits,
+  // which is too late for imperative guards that fire twice in the same tick
+  // (e.g. a fast double-tap invoking two hook calls back-to-back inside one
+  // `act()`): the second call would otherwise read a stale ref.
+  function updateStatus(next) {
+    statusRef.current = next;
+    setStatus(next);
+  }
+
   useEffect(() => {
     mountedRef.current = true;
     if (!isRecordingSupported()) {
       // Nothing to fetch: without a mic there is no audio to score, and the
       // drill cannot fall back to the text input.
       setError(NO_MIC_MSG);
-      setStatus("unavailable");
+      updateStatus("unavailable");
       return () => {
         mountedRef.current = false;
       };
@@ -71,15 +81,15 @@ export function usePronunciationDrill({ focus = null } = {}) {
         setPromptIndex(list.length > 0 ? 0 : -1);
         if (list.length === 0) {
           setError(NO_PROMPTS_MSG);
-          setStatus("unavailable");
+          updateStatus("unavailable");
           return;
         }
-        setStatus("prompt");
+        updateStatus("prompt");
       })
       .catch((err) => {
         if (!mountedRef.current) return;
         setError(err.message);
-        setStatus("unavailable");
+        updateStatus("unavailable");
       });
     return () => {
       mountedRef.current = false;
@@ -107,17 +117,17 @@ export function usePronunciationDrill({ focus = null } = {}) {
       setReport(scored);
       setPronProvider(scored.pronProvider ?? null);
       setAttempts((n) => n + 1);
-      setStatus("result");
+      updateStatus("result");
     } catch (err) {
       if (!mountedRef.current || attemptSeqRef.current !== seq) return;
       if (err.code === "PRON_UNAVAILABLE") {
         setScoringUnavailable(true);
         setError(SIDECAR_DOWN_MSG);
-        setStatus("unavailable");
+        updateStatus("unavailable");
         return;
       }
       setError(err.message);
-      setStatus("prompt");
+      updateStatus("prompt");
     } finally {
       if (guard !== null) clearTimeout(guard);
     }
@@ -134,7 +144,7 @@ export function usePronunciationDrill({ focus = null } = {}) {
     if (statusRef.current !== "prompt") return;
     setError(null);
     attemptSeqRef.current += 1;
-    setStatus("recording");
+    updateStatus("recording");
 
     const handle = await startRecorder({
       onError: handleRecorderError,
@@ -146,7 +156,7 @@ export function usePronunciationDrill({ focus = null } = {}) {
       return;
     }
     if (!handle) {
-      setStatus("prompt");
+      updateStatus("prompt");
       return;
     }
     // The learner may have cancelled while the permission prompt was open.
@@ -161,22 +171,22 @@ export function usePronunciationDrill({ focus = null } = {}) {
     if (statusRef.current !== "recording") return;
     const handle = recorderRef.current;
     if (!handle) {
-      setStatus("prompt");
+      updateStatus("prompt");
       return;
     }
     const seq = attemptSeqRef.current;
-    setStatus("scoring"); // also the re-entrancy guard against a double tap
+    updateStatus("scoring"); // also the re-entrancy guard against a double tap
 
     const take = await handle.stop();
     recorderRef.current = null;
     if (!mountedRef.current || attemptSeqRef.current !== seq) return;
     if (!take) {
-      setStatus("prompt"); // the recorder already reported why via onError
+      updateStatus("prompt"); // the recorder already reported why via onError
       return;
     }
     if (take.durationMs < MIN_DRILL_MS) {
       setError(TOO_SHORT_MSG);
-      setStatus("prompt");
+      updateStatus("prompt");
       return;
     }
     await scoreTake(take.blob, seq);
@@ -188,7 +198,7 @@ export function usePronunciationDrill({ focus = null } = {}) {
     recorderRef.current?.cancel();
     recorderRef.current = null;
     setError(null);
-    setStatus("prompt");
+    updateStatus("prompt");
   }
 
   // ---------------- navigation ----------------
@@ -198,27 +208,34 @@ export function usePronunciationDrill({ focus = null } = {}) {
     if (!promptRef.current) return; // no-mic / no-prompts has nothing to retry
     setReport(null);
     setError(null);
-    setStatus("prompt");
+    updateStatus("prompt");
   }
 
   function nextPrompt() {
-    if (statusRef.current === "recording" || statusRef.current === "scoring") return;
+    if (statusRef.current === "recording") return;
+    // Switching prompts mid-scoring abandons the in-flight attempt rather than
+    // blocking on it: bump the sequence so scoreTake's stale-response guard
+    // discards whatever answer eventually arrives for the abandoned take.
+    if (statusRef.current === "scoring") attemptSeqRef.current += 1;
     const list = promptsRef.current;
     if (list.length === 0) return;
     setPromptIndex((i) => (i + 1) % list.length);
     setReport(null);
     setError(null);
-    setStatus("prompt");
+    updateStatus("prompt");
   }
 
   function selectPrompt(id) {
-    if (statusRef.current === "recording" || statusRef.current === "scoring") return;
+    if (statusRef.current === "recording") return;
+    // Same invalidation as nextPrompt: `scoring` is a passive async wait, so
+    // switching prompts here is allowed and must invalidate the stale attempt.
+    if (statusRef.current === "scoring") attemptSeqRef.current += 1;
     const index = promptsRef.current.findIndex((p) => p.id === id);
     if (index === -1) return;
     setPromptIndex(index);
     setReport(null);
     setError(null);
-    setStatus("prompt");
+    updateStatus("prompt");
   }
 
   return {
