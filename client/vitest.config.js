@@ -11,7 +11,13 @@ export default defineConfig({
     css: false,
     coverage: {
       provider: "v8",
-      include: ["src/hooks/useConversation.js", "src/lib/speech.js"],
+      include: [
+        "src/hooks/useConversation.js",
+        "src/lib/speech.js",
+        "src/hooks/usePronunciationDrill.js",
+        "src/lib/recorder.js",
+        "src/lib/pronErrors.js",
+      ],
       thresholds: { lines: 80, functions: 80, branches: 80, statements: 80 },
     },
   },
