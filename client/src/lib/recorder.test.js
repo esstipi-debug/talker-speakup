@@ -55,3 +55,45 @@ describe("recorder — happy path", () => {
     expect(lastMicTrack().stop).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("recorder — failure paths", () => {
+  it("resolves null and reports 'unsupported' when MediaRecorder is missing", async () => {
+    vi.stubGlobal("MediaRecorder", undefined);
+    const onError = vi.fn();
+    await expect(startRecording({ onError })).resolves.toBeNull();
+    expect(onError).toHaveBeenCalledWith("unsupported");
+  });
+
+  it("resolves null with the DOMException name when the user refuses the mic", async () => {
+    navigator.mediaDevices.getUserMedia.mockRejectedValueOnce(
+      Object.assign(new Error("denied"), { name: "NotAllowedError" }),
+    );
+    const onError = vi.fn();
+    await expect(startRecording({ onError })).resolves.toBeNull();
+    expect(onError).toHaveBeenCalledWith("NotAllowedError");
+  });
+
+  it("falls back to 'mic-error' when the rejection carries no name", async () => {
+    navigator.mediaDevices.getUserMedia.mockRejectedValueOnce({});
+    const onError = vi.fn();
+    await expect(startRecording({ onError })).resolves.toBeNull();
+    expect(onError).toHaveBeenCalledWith("mic-error");
+  });
+
+  it("forwards recorder errors, defaulting to 'recorder-error'", async () => {
+    const onError = vi.fn();
+    await startRecording({ onError });
+    lastRecorder().emitError("SecurityError");
+    lastRecorder().emitError(undefined);
+    expect(onError).toHaveBeenNthCalledWith(1, "SecurityError");
+    expect(onError).toHaveBeenNthCalledWith(2, "recorder-error");
+  });
+
+  it("resolves null and reports 'empty-recording' when nothing was captured", async () => {
+    const onError = vi.fn();
+    const handle = await startRecording({ onError });
+    await expect(handle.stop()).resolves.toBeNull();
+    expect(onError).toHaveBeenCalledWith("empty-recording");
+    expect(lastMicTrack().stop).toHaveBeenCalledTimes(1);
+  });
+});

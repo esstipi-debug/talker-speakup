@@ -33,7 +33,13 @@ export async function startRecording({ maxMs = MAX_DRILL_MS, onError, onAutoStop
     return null;
   }
 
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err) {
+    onError?.(err?.name || "mic-error");
+    return null;
+  }
 
   const mimeType = pickSupportedMimeType();
   const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
