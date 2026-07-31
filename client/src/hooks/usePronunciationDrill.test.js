@@ -515,3 +515,83 @@ describe("usePronunciationDrill — races", () => {
     expect(result.current.status).toBe("prompt");
   });
 });
+
+describe("usePronunciationDrill — navigation and guards", () => {
+  it("advances through the set and wraps", async () => {
+    const { result } = await mounted();
+    act(() => result.current.nextPrompt());
+    expect(result.current.prompt.id).toBe("v-b-01");
+    act(() => result.current.nextPrompt());
+    expect(result.current.prompt.id).toBe("ih-iy-01");
+    expect(result.current.promptIndex).toBe(0);
+  });
+
+  it("selects a prompt by id and ignores an unknown id", async () => {
+    const { result } = await mounted();
+    act(() => result.current.selectPrompt("v-b-01"));
+    expect(result.current.promptIndex).toBe(1);
+    act(() => result.current.selectPrompt("does-not-exist"));
+    expect(result.current.promptIndex).toBe(1);
+  });
+
+  it("clears the previous score when moving to the next prompt", async () => {
+    const { result } = await mounted();
+    await take(result, "result");
+    act(() => result.current.nextPrompt());
+    expect(result.current.status).toBe("prompt");
+    expect(result.current.report).toBeNull();
+    expect(result.current.errors).toEqual([]);
+  });
+
+  it("refuses to start a take unless it is on the prompt screen", async () => {
+    const { result } = await mounted();
+    await take(result, "result");
+    act(() => { result.current.startRecording(); });
+    expect(result.current.status).toBe("result");
+    expect(lastHandle.stop).toHaveBeenCalledTimes(1); // no second take began
+  });
+
+  it("refuses to stop or cancel when nothing is recording", async () => {
+    const { result } = await mounted();
+    act(() => { result.current.stopRecording(); });
+    act(() => result.current.cancelRecording());
+    expect(result.current.status).toBe("prompt");
+    expect(lastHandle).toBeNull();
+  });
+
+  // NOTE: navigation is blocked only during "recording". Navigating away
+  // during "scoring" is deliberately allowed — it abandons the in-flight
+  // attempt (bumping attemptSeqRef so a stale response is discarded) rather
+  // than blocking the learner on a pending network round-trip. That
+  // scoring-navigation path is already pinned by the "races" tests above
+  // ("discards a stale response when the take was cancelled and restarted",
+  // "does not orphan a newly-adopted recorder when a stale stopRecording
+  // resolves late"). This test covers only the recording guard.
+  it("refuses to navigate while recording", async () => {
+    const { result } = await mounted();
+    act(() => { result.current.startRecording(); });
+    await waitFor(() => expect(result.current.status).toBe("recording"));
+    act(() => result.current.nextPrompt());
+    act(() => result.current.selectPrompt("v-b-01"));
+    expect(result.current.prompt.id).toBe("ih-iy-01");
+    expect(result.current.status).toBe("recording");
+  });
+
+  it("refuses to retry from the prompt screen", async () => {
+    const { result } = await mounted();
+    act(() => result.current.retry());
+    expect(result.current.status).toBe("prompt");
+  });
+
+  it("refuses to retry or navigate out of the no-microphone stop", async () => {
+    micSupported = false;
+    const { result } = renderHook(() => usePronunciationDrill());
+    await waitFor(() => expect(result.current.status).toBe("unavailable"));
+    act(() => result.current.retry());
+    act(() => result.current.nextPrompt());
+    expect(result.current.status).toBe("unavailable");
+    expect(result.current.error).toBe(
+      "No microphone available — the drill needs audio it can score.",
+    );
+  });
+});
