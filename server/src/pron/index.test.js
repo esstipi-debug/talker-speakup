@@ -49,10 +49,11 @@ describe("pron factory — provider resolution", () => {
     expect(currentPronProvider()).toBe("local");
   });
 
-  it("wraps azure in a spend guard when a key is present, keeping the reported provider name honest", async () => {
+  it("wraps azure in a spend guard when a key and region are present, keeping the reported provider name honest", async () => {
     const { getPron, currentPronProvider } = await loadPron({
       PRON_PROVIDER: "azure",
       AZURE_SPEECH_KEY: "secret",
+      AZURE_SPEECH_REGION: "westeurope",
     });
     const { AzurePron } = await import("./azure.js");
     const { MockPron } = await import("./mock.js");
@@ -68,6 +69,7 @@ describe("pron factory — provider resolution", () => {
     const { getPron, currentPronProvider } = await loadPron({
       PRON_PROVIDER: "azure",
       AZURE_SPEECH_KEY: undefined,
+      AZURE_SPEECH_REGION: "westeurope",
     });
     const { MockPron } = await import("./mock.js");
     expect(getPron()).toBeInstanceOf(MockPron);
@@ -81,6 +83,30 @@ describe("pron factory — provider resolution", () => {
     const { currentPronProvider } = await loadPron({
       PRON_PROVIDER: "azure",
       AZURE_SPEECH_KEY: "   ",
+      AZURE_SPEECH_REGION: "westeurope",
+    });
+    expect(currentPronProvider()).toBe("mock");
+  });
+
+  it("warns and falls back to mock when azure is asked for without a region (finding 7)", async () => {
+    const { getPron, currentPronProvider } = await loadPron({
+      PRON_PROVIDER: "azure",
+      AZURE_SPEECH_KEY: "secret",
+      AZURE_SPEECH_REGION: undefined,
+    });
+    const { MockPron } = await import("./mock.js");
+    expect(getPron()).toBeInstanceOf(MockPron);
+    expect(currentPronProvider()).toBe("mock");
+    expect(console.warn).toHaveBeenCalledWith(
+      "[pron] PRON_PROVIDER=azure but AZURE_SPEECH_REGION is missing → falling back to mock.",
+    );
+  });
+
+  it("treats a whitespace-only azure region as missing", async () => {
+    const { currentPronProvider } = await loadPron({
+      PRON_PROVIDER: "azure",
+      AZURE_SPEECH_KEY: "secret",
+      AZURE_SPEECH_REGION: "   ",
     });
     expect(currentPronProvider()).toBe("mock");
   });
@@ -108,6 +134,7 @@ describe("pron factory — provider resolution", () => {
     const { getPron } = await loadPron({
       PRON_PROVIDER: "azure",
       AZURE_SPEECH_KEY: "secret",
+      AZURE_SPEECH_REGION: "westeurope",
       PRON_AZURE_MONTHLY_CAP_USD: "5",
       PRON_AZURE_RATE_PER_HOUR_USD: "1.5",
       PRON_BUDGET_STATE_FILE: "C:/tmp/test-budget.json",
@@ -119,7 +146,11 @@ describe("pron factory — provider resolution", () => {
   });
 
   it("defaults the azure spend cap, rate, and state-file path when unset", async () => {
-    const { getPron } = await loadPron({ PRON_PROVIDER: "azure", AZURE_SPEECH_KEY: "secret" });
+    const { getPron } = await loadPron({
+      PRON_PROVIDER: "azure",
+      AZURE_SPEECH_KEY: "secret",
+      AZURE_SPEECH_REGION: "westeurope",
+    });
     const pron = getPron();
     expect(pron.guard.capUsd).toBe(12);
     expect(pron.guard.ratePerHourUsd).toBe(0.66);
@@ -131,6 +162,7 @@ describe("pron factory — provider resolution", () => {
     const { getPron } = await loadPron({
       PRON_PROVIDER: "azure",
       AZURE_SPEECH_KEY: "secret",
+      AZURE_SPEECH_REGION: "westeurope",
       PRON_AZURE_MONTHLY_CAP_USD: "0",
     });
     expect(getPron().guard.capUsd).toBe(0);
@@ -141,6 +173,7 @@ describe("pron factory — provider resolution", () => {
     const { getPron } = await loadPron({
       PRON_PROVIDER: "azure",
       AZURE_SPEECH_KEY: "secret",
+      AZURE_SPEECH_REGION: "westeurope",
       PRON_AZURE_MONTHLY_CAP_USD: "not-a-number",
     });
     expect(getPron().guard.capUsd).toBe(12);

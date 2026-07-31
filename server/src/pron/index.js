@@ -9,10 +9,10 @@ import { BudgetCappedPron } from "./budgetCappedPron.js";
  *   local -> score via the sidecar container on :8899 (CAPT pipeline)
  *   mock  -> deterministic offline pseudo-scores, $0, no Docker (default)
  *   azure -> a manually-selected, budget-capped supplement (design §13) —
- *            still requires an explicit PRON_PROVIDER=azure + a key; wrapped
- *            in BudgetCappedPron, which falls back to mock once the monthly
- *            spend cap (PRON_AZURE_MONTHLY_CAP_USD) is met. Never the default,
- *            never selected by key presence alone.
+ *            still requires an explicit PRON_PROVIDER=azure + a key AND a
+ *            region; wrapped in BudgetCappedPron, which falls back to mock
+ *            once the monthly spend cap (PRON_AZURE_MONTHLY_CAP_USD) is met.
+ *            Never the default, never selected by key presence alone.
  * Swap with PRON_PROVIDER in server/.env.
  */
 let _pron = null;
@@ -32,11 +32,21 @@ function numberEnv(name, fallback) {
 function resolveProvider() {
   const explicit = process.env.PRON_PROVIDER?.trim().toLowerCase();
   const hasAzureKey = !!process.env.AZURE_SPEECH_KEY?.trim();
+  const hasAzureRegion = !!process.env.AZURE_SPEECH_REGION?.trim();
 
   let provider = explicit || "mock";
 
   if (provider === "azure" && !hasAzureKey) {
     console.warn("[pron] PRON_PROVIDER=azure but AZURE_SPEECH_KEY is missing → falling back to mock.");
+    provider = "mock";
+  } else if (provider === "azure" && !hasAzureRegion) {
+    // AzurePron itself requires both key and region (azure.js); gating only
+    // on the key here would produce `pron: azure` in /health with no warning,
+    // then a 502 on every real drill — degrade at config time, not request
+    // time, same as the missing-key case above.
+    console.warn(
+      "[pron] PRON_PROVIDER=azure but AZURE_SPEECH_REGION is missing → falling back to mock.",
+    );
     provider = "mock";
   }
   if (provider !== "local" && provider !== "mock" && provider !== "azure") {
