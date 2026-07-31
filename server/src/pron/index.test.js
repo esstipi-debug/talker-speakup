@@ -17,6 +17,9 @@ beforeEach(() => {
   delete process.env.PRON_TIMEOUT_MS;
   delete process.env.AZURE_SPEECH_KEY;
   delete process.env.AZURE_SPEECH_REGION;
+  delete process.env.PRON_AZURE_MONTHLY_CAP_USD;
+  delete process.env.PRON_AZURE_RATE_PER_HOUR_USD;
+  delete process.env.PRON_BUDGET_STATE_FILE;
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
@@ -46,13 +49,18 @@ describe("pron factory — provider resolution", () => {
     expect(currentPronProvider()).toBe("local");
   });
 
-  it("selects azure only when a key is present", async () => {
+  it("wraps azure in a spend guard when a key is present, keeping the reported provider name honest", async () => {
     const { getPron, currentPronProvider } = await loadPron({
       PRON_PROVIDER: "azure",
       AZURE_SPEECH_KEY: "secret",
     });
     const { AzurePron } = await import("./azure.js");
-    expect(getPron()).toBeInstanceOf(AzurePron);
+    const { MockPron } = await import("./mock.js");
+    const { BudgetCappedPron } = await import("./budgetCappedPron.js");
+    const pron = getPron();
+    expect(pron).toBeInstanceOf(BudgetCappedPron);
+    expect(pron.metered).toBeInstanceOf(AzurePron);
+    expect(pron.fallback).toBeInstanceOf(MockPron);
     expect(currentPronProvider()).toBe("azure");
   });
 
@@ -94,6 +102,38 @@ describe("pron factory — provider resolution", () => {
     expect(console.warn).toHaveBeenCalledWith(
       '[pron] unknown PRON_PROVIDER="elsa" → falling back to mock.',
     );
+  });
+
+  it("reads the azure spend cap, rate, and state-file path from env", async () => {
+    const { getPron } = await loadPron({
+      PRON_PROVIDER: "azure",
+      AZURE_SPEECH_KEY: "secret",
+      PRON_AZURE_MONTHLY_CAP_USD: "5",
+      PRON_AZURE_RATE_PER_HOUR_USD: "1.5",
+      PRON_BUDGET_STATE_FILE: "C:/tmp/test-budget.json",
+    });
+    const pron = getPron();
+    expect(pron.guard.capUsd).toBe(5);
+    expect(pron.guard.ratePerHourUsd).toBe(1.5);
+    expect(pron.guard.statePath).toBe("C:/tmp/test-budget.json");
+  });
+
+  it("defaults the azure spend cap, rate, and state-file path when unset", async () => {
+    const { getPron } = await loadPron({ PRON_PROVIDER: "azure", AZURE_SPEECH_KEY: "secret" });
+    const pron = getPron();
+    expect(pron.guard.capUsd).toBe(12);
+    expect(pron.guard.ratePerHourUsd).toBe(0.66);
+    expect(pron.guard.statePath).toBe(".pron-budget.json");
+  });
+
+  it("respects an explicit zero cap rather than silently substituting the default", async () => {
+    // `0 || default` would wrongly discard an intentional "spend nothing" cap — this pins that.
+    const { getPron } = await loadPron({
+      PRON_PROVIDER: "azure",
+      AZURE_SPEECH_KEY: "secret",
+      PRON_AZURE_MONTHLY_CAP_USD: "0",
+    });
+    expect(getPron().guard.capUsd).toBe(0);
   });
 });
 

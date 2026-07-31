@@ -1,8 +1,10 @@
 import { clampScore, PRON_ERROR_CODES, validateReport } from "./contract.js";
 
 /**
- * Azure Speech pronunciation-assessment adapter — CALIBRATION ONLY (design §2,
- * "Cloud as a runtime path" is a non-goal). This class enforces presence of
+ * Azure Speech pronunciation-assessment adapter — a manually-selected,
+ * budget-capped runtime supplement (design §13), never the default and never
+ * auto-selected. Wrapped in BudgetCappedPron by the factory (./index.js) when
+ * explicitly chosen. This class enforces presence of
  * AZURE_SPEECH_KEY and AZURE_SPEECH_REGION; provider selection is delegated to
  * the factory that instantiates this class.
  *
