@@ -2392,3 +2392,1269 @@ git -C C:/talker/.claude/worktrees/kern-brand-product-assets-5f587e commit -m "f
 ```
 
 ---
+
+## Addendum — Tasks 12-16, authored 2026-07-31 to close a real gap
+
+**Why this addendum exists.** Tasks 1-11 above build the analysis/verdict layer (`correlate.py`,
+`arpabet_ipa.py`) and specify a content file, but the plan **as originally authored stops before
+ever building `run_calibration.py`** — the module that actually iterates speechocean762 and calls
+the sidecar to produce the CSV `correlate.py` reads. That module is referenced three times in the
+tasks above ("Reads the CSV written by `run_calibration.py`", "Columns `run_calibration.py` writes
+and this module reads", "one or more score CSVs written by `run_calibration.py`") but no task
+creates it. This lines up with the plan's own "Outstanding verification debt" note at the top of
+this document (the authoring run hit `529 Overloaded` twice and skipped its adversarial review
+passes) — the document was cut off mid-plan. Verified independently (git log, live file reads, a
+HuggingFace dataset-viewer fetch of `mispeech/speechocean762`'s actual schema, and the sidecar's
+real `/assess`/`/health`/error contracts read from `docs/superpowers/plans/2026-07-27-pronunciation-1-sidecar.md`)
+before writing a single line below.
+
+**Also discovered:** `server/src/content/drills.v1.json` **already exists** — built during Plan 2
+(commits `6ea78fc`, `ab6a99b`) so the server's `/pron/prompts` route had content to serve, and
+already shipped to and consumed by the client (Plan 3). Its 21 prompts satisfy the same schema as
+Tasks 1-3 above but use different sentences/keyWords (e.g. "He will fill the field with wheat."
+rather than Task 1's "Sit down and take the seat by the window."). Running Tasks 1-3 literally would
+overwrite already-shipped, already-once-fixed content with a redundant alternate set for no
+behavioral gain. **Decision:** keep the shipped content; Task 15 below builds the phoneme-coverage
+test suite Tasks 1-3 would have produced, adapted to validate the content that actually exists,
+rather than replacing it. Tasks 1-3's original text is left unmodified above as the historical
+record of original intent — they are superseded, not deleted.
+
+**Docker caveat, inherited from Plan 1:** the sidecar (`docker/pron` per Plan 1) has never actually
+been built or run in this environment (Docker Desktop was not started; Plan 1's own Task 4 and Tasks
+13-14 are deferred for the same reason). Tasks 12-14 below build and fully unit-test
+`run_calibration.py` against mocked HTTP calls and fake in-memory records — they do **not** require
+Docker to implement or verify. Actually running the harness against a live sidecar and the real
+speechocean762 corpus is an operational step that waits on Plan 1's deferred tasks, exactly as
+already logged in the SDD ledger. Task 16's README says this explicitly so nobody mistakes "the code
+runs its tests" for "the corpus has been scored."
+
+---
+
+### Task 12: `sidecar_client.py` — HTTP client, WAV encoding, typed errors
+
+**Files:**
+- Create: `tools/calibration/sidecar_client.py`
+- Test: `tools/calibration/tests/test_sidecar_client.py`
+
+**Interfaces:**
+- Produces:
+  - `class SidecarError(Exception)` with `__init__(self, code: str, message: str, status: int) -> None`,
+    attributes `.code`, `.message`, `.status`
+  - `def encode_wav(samples, sample_rate: int) -> bytes` — `samples` is a 1-D float array in `[-1, 1]`
+    (the shape HuggingFace `datasets`' `Audio` feature decodes to)
+  - `def check_health(base_url: str, *, timeout: float = 10.0) -> dict`
+  - `def call_assess(base_url: str, wav_bytes: bytes, text: str, *, mode: str = "scripted", timeout: float = 60.0) -> dict`
+- Consumes: `requests`, `scipy.io.wavfile`, `numpy`, `io.BytesIO`.
+
+The sidecar's real contract (verified against `docs/superpowers/plans/2026-07-27-pronunciation-1-sidecar.md`,
+not assumed): `POST /assess` is multipart (`audio` file, `text` form, `mode` form, default
+`"scripted"`); on success it returns the `PronunciationReport` JSON body directly (no envelope). On
+failure it returns `{"error": "<sentence>", "code": "<ERROR_CODE>"}` with a 4xx/5xx status — the
+error codes are `MISSING_AUDIO`, `MISSING_TEXT`, `TEXT_TOO_LONG`, `INVALID_MODE`, `NO_SPEECH`,
+`DECODE_FAILED`, `UNPRONOUNCEABLE_TEXT`, `MODEL_UNAVAILABLE`, `INTERNAL`. `GET /health` always
+returns HTTP 200 (even when degraded) with `{"status": "ok"|"degraded", "model": "<id>", ...}`.
+
+**Step 1 — write the failing test.**
+
+Create `tools/calibration/tests/test_sidecar_client.py`:
+
+```python
+"""HTTP client tests — every request is mocked, no network and no live sidecar."""
+import io
+import sys
+from pathlib import Path
+from unittest.mock import Mock, patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import numpy as np
+import pytest
+import requests
+from scipy.io import wavfile
+
+from sidecar_client import SidecarError, call_assess, check_health, encode_wav  # noqa: E402
+
+
+def test_encode_wav_round_trips_sample_rate_and_samples():
+    samples = np.array([0.0, 0.5, -0.5, 1.0, -1.0], dtype=np.float32)
+    wav_bytes = encode_wav(samples, 16000)
+    rate, decoded = wavfile.read(io.BytesIO(wav_bytes))
+    assert rate == 16000
+    assert decoded.dtype == np.int16
+    assert decoded[0] == 0
+    assert decoded[3] == 32767
+    assert decoded[4] == -32767
+
+
+def test_encode_wav_clips_out_of_range_samples_instead_of_wrapping():
+    samples = np.array([2.0, -2.0], dtype=np.float32)
+    _rate, decoded = wavfile.read(io.BytesIO(encode_wav(samples, 16000)))
+    assert decoded[0] == 32767
+    assert decoded[1] == -32767
+
+
+def test_call_assess_returns_the_parsed_report_on_success():
+    fake_response = Mock(status_code=200)
+    fake_response.json.return_value = {"version": 1, "overall": {"accuracy": 90}}
+    with patch("sidecar_client.requests.post", return_value=fake_response) as mock_post:
+        report = call_assess("http://localhost:8899", b"RIFF...", "hello", mode="scripted")
+    assert report == {"version": 1, "overall": {"accuracy": 90}}
+    _args, kwargs = mock_post.call_args
+    assert kwargs["data"] == {"text": "hello", "mode": "scripted"}
+    assert "audio" in kwargs["files"]
+
+
+def test_call_assess_raises_sidecar_error_with_code_and_message_on_4xx():
+    fake_response = Mock(status_code=422, text="ignored")
+    fake_response.json.return_value = {"error": "Couldn't make out any speech.", "code": "NO_SPEECH"}
+    with patch("sidecar_client.requests.post", return_value=fake_response):
+        with pytest.raises(SidecarError) as excinfo:
+            call_assess("http://localhost:8899", b"RIFF...", "hello")
+    assert excinfo.value.code == "NO_SPEECH"
+    assert excinfo.value.status == 422
+    assert "speech" in excinfo.value.message
+
+
+def test_call_assess_raises_unreachable_on_a_connection_error():
+    with patch("sidecar_client.requests.post", side_effect=requests.ConnectionError("refused")):
+        with pytest.raises(SidecarError) as excinfo:
+            call_assess("http://localhost:8899", b"RIFF...", "hello")
+    assert excinfo.value.code == "UNREACHABLE"
+    assert excinfo.value.status == 0
+
+
+def test_call_assess_falls_back_to_internal_when_the_error_body_is_not_json():
+    fake_response = Mock(status_code=500, text="<html>gateway error</html>")
+    fake_response.json.side_effect = ValueError("not json")
+    with patch("sidecar_client.requests.post", return_value=fake_response):
+        with pytest.raises(SidecarError) as excinfo:
+            call_assess("http://localhost:8899", b"RIFF...", "hello")
+    assert excinfo.value.code == "INTERNAL"
+
+
+def test_check_health_returns_the_parsed_body():
+    fake_response = Mock(status_code=200)
+    fake_response.json.return_value = {"status": "ok", "model": "facebook/wav2vec2-lv-60-espeak-cv-ft"}
+    with patch("sidecar_client.requests.get", return_value=fake_response):
+        body = check_health("http://localhost:8899")
+    assert body["model"] == "facebook/wav2vec2-lv-60-espeak-cv-ft"
+
+
+def test_check_health_raises_unreachable_on_a_connection_error():
+    with patch("sidecar_client.requests.get", side_effect=requests.ConnectionError("refused")):
+        with pytest.raises(SidecarError) as excinfo:
+            check_health("http://localhost:8899")
+    assert excinfo.value.code == "UNREACHABLE"
+```
+
+**Step 2 — run it and watch it fail.**
+
+```powershell
+cd C:/talker/.claude/worktrees/kern-brand-product-assets-5f587e
+tools/calibration/.venv/Scripts/python.exe -m pytest tools/calibration/tests/test_sidecar_client.py -q
+```
+
+Expected failure:
+
+```
+E   ModuleNotFoundError: No module named 'sidecar_client'
+```
+
+**Step 3 — implement.**
+
+Create `tools/calibration/sidecar_client.py`:
+
+```python
+"""Minimal HTTP client for the pronunciation sidecar (docs/.../pronunciation-1-sidecar.md).
+
+The sidecar is a standalone FastAPI service reached over plain HTTP — this
+module has no dependency on the Node server or any of its code.
+"""
+
+from __future__ import annotations
+
+import io
+
+import numpy as np
+import requests
+from scipy.io import wavfile
+
+
+class SidecarError(Exception):
+    """One HTTP call to the sidecar failed. `.code` mirrors the sidecar's own
+    error codes (NO_SPEECH, DECODE_FAILED, ...) or a client-side code this
+    module assigns itself (UNREACHABLE, INTERNAL) when the sidecar's body
+    could not be parsed at all.
+    """
+
+    def __init__(self, code: str, message: str, status: int) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.status = status
+
+
+def encode_wav(samples, sample_rate: int) -> bytes:
+    """Float32 samples in [-1, 1] -> 16-bit PCM WAV bytes.
+
+    ffmpeg (inside the sidecar's audio.decode_to_16k_mono) resamples on the
+    way in, so the native speechocean762 sample rate is written as-is.
+    """
+    clipped = np.clip(np.asarray(samples, dtype=np.float32), -1.0, 1.0)
+    pcm16 = (clipped * 32767).astype(np.int16)
+    buffer = io.BytesIO()
+    wavfile.write(buffer, sample_rate, pcm16)
+    return buffer.getvalue()
+
+
+def _error_from_response(response) -> SidecarError:
+    try:
+        body = response.json()
+    except ValueError:
+        return SidecarError("INTERNAL", response.text or "sidecar returned a non-JSON error", response.status_code)
+    if not isinstance(body, dict):
+        return SidecarError("INTERNAL", str(body), response.status_code)
+    return SidecarError(
+        body.get("code", "INTERNAL"),
+        body.get("error", "sidecar returned an error with no message"),
+        response.status_code,
+    )
+
+
+def call_assess(
+    base_url: str,
+    wav_bytes: bytes,
+    text: str,
+    *,
+    mode: str = "scripted",
+    timeout: float = 60.0,
+) -> dict:
+    """POST one utterance to `/assess`. Returns the parsed PronunciationReport.
+
+    Raises SidecarError for both a sidecar-side failure (4xx/5xx with the
+    frozen error body) and a client-side failure (connection refused, DNS,
+    timeout) so callers have one exception type to catch.
+    """
+    try:
+        response = requests.post(
+            f"{base_url}/assess",
+            files={"audio": ("utterance.wav", wav_bytes, "audio/wav")},
+            data={"text": text, "mode": mode},
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        raise SidecarError("UNREACHABLE", f"could not reach {base_url}: {exc}", 0) from exc
+
+    if response.status_code >= 400:
+        raise _error_from_response(response)
+    return response.json()
+
+
+def check_health(base_url: str, *, timeout: float = 10.0) -> dict:
+    """GET `/health`. Raises SidecarError only when the sidecar cannot be reached at all —
+    `/health` itself always answers 200, even when degraded."""
+    try:
+        response = requests.get(f"{base_url}/health", timeout=timeout)
+    except requests.RequestException as exc:
+        raise SidecarError("UNREACHABLE", f"could not reach {base_url}: {exc}", 0) from exc
+    if response.status_code >= 400:
+        raise _error_from_response(response)
+    return response.json()
+```
+
+**Step 4 — run it and watch it pass.**
+
+```powershell
+tools/calibration/.venv/Scripts/python.exe -m pytest tools/calibration/tests/test_sidecar_client.py -q
+```
+
+Expected: `8 passed`.
+
+**Step 5 — commit.**
+
+```powershell
+git -C C:/talker/.claude/worktrees/kern-brand-product-assets-5f587e add tools/calibration/sidecar_client.py tools/calibration/tests/test_sidecar_client.py
+git -C C:/talker/.claude/worktrees/kern-brand-product-assets-5f587e show :tools/calibration/sidecar_client.py | Select-String -Pattern "def call_assess"
+git -C C:/talker/.claude/worktrees/kern-brand-product-assets-5f587e commit -m "feat(calibration): sidecar HTTP client with WAV encoding and typed errors"
+```
+
+---
+
+### Task 13: `record_transform.py` — speechocean762 record + sidecar report → CSV rows
+
+This is the task that actually uses the ARPAbet↔IPA alignment from Tasks 5-6. A speechocean762 word
+carries `phones` (ARPAbet with a stress digit, e.g. `["DH", "AH0"]`), `phones-accuracy` (a 0-2 float
+per phone, index-aligned with `phones`), and `mispronunciations` (a list of
+`{"index": int, "canonical-phone": str, "pronounced-phone": str}`, empty when the word was said
+correctly). The sidecar's matching word carries `phones` as
+`[{"ipa": str, "score": int, "start": float, "end": float, "substituted"?: str}, ...]`. These two
+phone lists are different lengths whenever a single espeak IPA token covers more than one ARPAbet
+phone (`"ɑːɹ"` = `AA R`) — `align_ipa_to_arpabet` is exactly the function that pairs them correctly.
+
+**Files:**
+- Create: `tools/calibration/record_transform.py`
+- Test: `tools/calibration/tests/test_record_transform.py`
+
+**Interfaces:**
+- Produces:
+  - `BLANK_ROW: dict` — every `correlate.REQUIRED_COLUMNS` key mapped to `""`
+  - `def utterance_row(model: str, utt_id: str, human_accuracy, machine_accuracy) -> dict`
+  - `def error_row(model: str, utt_id: str, code: str) -> dict`
+  - `def phoneme_rows(model: str, utt_id: str, word_index: int, human_word: dict, machine_word: dict) -> list[dict]`
+  - `def build_utterance_rows(model: str, utt_id: str, human_record: dict, machine_report: dict) -> list[dict]`
+    — raises `ValueError` when `len(machine_report["words"]) != len(human_record["words"])`, so a
+    caller can turn that into an `error_row` rather than silently mis-pairing words by index.
+- Consumes: `correlate.REQUIRED_COLUMNS`, `arpabet_ipa.align_ipa_to_arpabet`,
+  `arpabet_ipa.ipa_to_arpabet`, `arpabet_ipa.strip_stress`.
+
+**A note on `human_sub` vs `arpabet` (do not conflate them).** The `arpabet` column (from Task 8's
+schema) already holds the *expected* ARPAbet phone — that is `human_word["phones"][index]`, stripped
+of its stress digit. `human_sub` is a **different** thing: it is what the human rater says was
+*actually pronounced* when they flagged a mispronunciation — that is
+`mispronunciation["pronounced-phone"]`, not `"canonical-phone"` (the canonical phone is redundant
+with `arpabet` and is not carried separately). Getting this backwards would make
+`substitution_agreement`'s identity check compare the expected phone against itself and silently
+report 100% identity accuracy no matter what the machine said.
+
+**Step 1 — write the failing test.**
+
+Create `tools/calibration/tests/test_record_transform.py`:
+
+```python
+"""record_transform tests. Every fixture below is hand-built, matching
+speechocean762's real schema (verified via the HuggingFace dataset viewer for
+mispeech/speechocean762) and the sidecar's real PronunciationReport shape
+(verified against docs/superpowers/plans/2026-07-27-pronunciation-1-sidecar.md).
+No network, no corpus download.
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import pytest  # noqa: E402
+
+from correlate import REQUIRED_COLUMNS  # noqa: E402
+from record_transform import (  # noqa: E402
+    BLANK_ROW,
+    build_utterance_rows,
+    error_row,
+    phoneme_rows,
+    utterance_row,
+)
+
+
+def test_blank_row_has_every_required_column_set_to_empty_string():
+    assert set(BLANK_ROW) == set(REQUIRED_COLUMNS)
+    assert all(value == "" for value in BLANK_ROW.values())
+
+
+def test_utterance_row_carries_the_human_and_machine_accuracy():
+    row = utterance_row("facebook", "test-00001", 8, 74)
+    assert row["model"] == "facebook"
+    assert row["level"] == "utterance"
+    assert row["utt_id"] == "test-00001"
+    assert row["human"] == "8"
+    assert row["machine"] == "74"
+
+
+def test_error_row_carries_only_the_error_code():
+    row = error_row("facebook", "test-00002", "NO_SPEECH")
+    assert row["level"] == "error"
+    assert row["error_code"] == "NO_SPEECH"
+    assert row["human"] == ""
+    assert row["machine"] == ""
+
+
+def test_phoneme_rows_pairs_one_to_one_when_lengths_agree():
+    human_word = {
+        "phones": ["DH", "AH0"],
+        "phones-accuracy": [2.0, 1.5],
+        "mispronunciations": [],
+    }
+    machine_word = {"phones": [{"ipa": "ð", "score": 95}, {"ipa": "ə", "score": 70}]}
+    rows = phoneme_rows("facebook", "test-00001", 0, human_word, machine_word)
+    assert len(rows) == 2
+    assert rows[0]["ipa"] == "ð"
+    assert rows[0]["arpabet"] == "DH"
+    assert rows[0]["human"] == "2.0"
+    assert rows[0]["machine"] == "95"
+    assert rows[1]["arpabet"] == "AH"  # stress digit stripped
+    assert all(r["level"] == "phoneme" and r["word_index"] == "0" for r in rows)
+    assert rows[0]["phone_index"] == "0"
+    assert rows[1]["phone_index"] == "1"
+
+
+def test_phoneme_rows_gives_a_multi_phone_machine_unit_one_row_per_human_phone():
+    # espeak's "ɑːɹ" covers the corpus's AA + R as two separate scored phones.
+    human_word = {"phones": ["K", "AA1", "R"], "phones-accuracy": [2.0, 1.0, 2.0], "mispronunciations": []}
+    machine_word = {"phones": [{"ipa": "k", "score": 90}, {"ipa": "ɑːɹ", "score": 60}]}
+    rows = phoneme_rows("facebook", "test-00003", 0, human_word, machine_word)
+    assert len(rows) == 3
+    assert rows[0]["ipa"] == "k"
+    assert rows[0]["arpabet"] == "K"
+    assert rows[0]["human"] == "2.0"
+    assert rows[0]["machine"] == "90"
+    # phone_index 1 and 2 both come from the SAME machine phone ("ɑːɹ"), so they
+    # share its machine score but keep their own distinct human ground truth.
+    shared = [r for r in rows if r["ipa"] == "ɑːɹ"]
+    assert len(shared) == 2
+    assert {r["phone_index"] for r in shared} == {"1", "2"}
+    assert {r["human"] for r in shared} == {"1.0", "2.0"}
+    assert all(r["machine"] == "60" for r in shared)
+
+
+def test_phoneme_rows_carries_the_pronounced_phone_as_human_sub_not_the_canonical_one():
+    human_word = {
+        "phones": ["IH1"],
+        "phones-accuracy": [0.0],
+        "mispronunciations": [{"index": 0, "canonical-phone": "IH1", "pronounced-phone": "IY0"}],
+    }
+    machine_word = {"phones": [{"ipa": "ɪ", "score": 20, "substituted": "iː"}]}
+    row = phoneme_rows("facebook", "test-00004", 0, human_word, machine_word)[0]
+    assert row["human_sub"] == "IY"  # pronounced-phone, stress stripped -- NOT "IH" (the canonical one)
+    assert row["machine_sub"] == "iː"
+    assert row["machine_sub_arpabet"] == "IY"
+
+
+def test_phoneme_rows_leaves_human_sub_and_machine_sub_blank_when_correct():
+    human_word = {"phones": ["P"], "phones-accuracy": [2.0], "mispronunciations": []}
+    machine_word = {"phones": [{"ipa": "p", "score": 95}]}
+    row = phoneme_rows("facebook", "test-00005", 0, human_word, machine_word)[0]
+    assert row["human_sub"] == ""
+    assert row["machine_sub"] == ""
+    assert row["machine_sub_arpabet"] == ""
+
+
+def test_phoneme_rows_skips_a_machine_phone_that_aligns_to_nothing():
+    # The machine hears an extra phone the corpus transcription does not have.
+    human_word = {"phones": ["S", "T"], "phones-accuracy": [2.0, 2.0], "mispronunciations": []}
+    machine_word = {
+        "phones": [
+            {"ipa": "s", "score": 90},
+            {"ipa": "t", "score": 90},
+            {"ipa": "t", "score": 10},  # extra, aligns to nothing per align_ipa_to_arpabet
+        ]
+    }
+    rows = phoneme_rows("facebook", "test-00006", 0, human_word, machine_word)
+    assert len(rows) == 2
+
+
+def test_build_utterance_rows_combines_the_utterance_row_and_every_words_phoneme_rows():
+    human_record = {
+        "accuracy": 8,
+        "words": [
+            {"phones": ["DH"], "phones-accuracy": [2.0], "mispronunciations": []},
+            {"phones": ["P"], "phones-accuracy": [1.0], "mispronunciations": []},
+        ],
+    }
+    machine_report = {
+        "overall": {"accuracy": 82},
+        "words": [
+            {"phones": [{"ipa": "ð", "score": 90}]},
+            {"phones": [{"ipa": "p", "score": 40}]},
+        ],
+    }
+    rows = build_utterance_rows("facebook", "test-00007", human_record, machine_report)
+    assert sum(1 for r in rows if r["level"] == "utterance") == 1
+    assert sum(1 for r in rows if r["level"] == "phoneme") == 2
+
+
+def test_build_utterance_rows_raises_on_a_word_count_mismatch():
+    human_record = {"accuracy": 8, "words": [{}, {}]}
+    machine_report = {"overall": {"accuracy": 80}, "words": [{}]}
+    with pytest.raises(ValueError, match="word count"):
+        build_utterance_rows("facebook", "test-00008", human_record, machine_report)
+```
+
+**Step 2 — run it and watch it fail.**
+
+```powershell
+tools/calibration/.venv/Scripts/python.exe -m pytest tools/calibration/tests/test_record_transform.py -q
+```
+
+Expected failure:
+
+```
+E   ModuleNotFoundError: No module named 'record_transform'
+```
+
+**Step 3 — implement.**
+
+Create `tools/calibration/record_transform.py`:
+
+```python
+"""Turn one speechocean762 record + the sidecar's matching PronunciationReport
+into the CSV rows correlate.py's REQUIRED_COLUMNS schema expects.
+
+speechocean762's real schema (HuggingFace dataset viewer, mispeech/speechocean762)
+and the sidecar's real /assess response shape (sidecar plan, report.py) are both
+verified, not assumed -- see the addendum note above this task in the plan.
+"""
+
+from __future__ import annotations
+
+from arpabet_ipa import align_ipa_to_arpabet, ipa_to_arpabet, strip_stress
+from correlate import REQUIRED_COLUMNS
+
+BLANK_ROW: dict = {column: "" for column in REQUIRED_COLUMNS}
+
+
+def utterance_row(model: str, utt_id: str, human_accuracy, machine_accuracy) -> dict:
+    """One utterance-level row. Scales differ on purpose (human 0-10, machine
+    0-100) -- Pearson/Spearman correlation does not require matching scales."""
+    return {
+        **BLANK_ROW,
+        "model": model,
+        "level": "utterance",
+        "utt_id": utt_id,
+        "human": str(human_accuracy),
+        "machine": str(machine_accuracy),
+    }
+
+
+def error_row(model: str, utt_id: str, code: str) -> dict:
+    """One row recording that an utterance could not be scored at all --
+    counted by correlate.coverage() as an attempted-but-failed utterance."""
+    return {**BLANK_ROW, "model": model, "level": "error", "utt_id": utt_id, "error_code": code}
+
+
+def phoneme_rows(
+    model: str,
+    utt_id: str,
+    word_index: int,
+    human_word: dict,
+    machine_word: dict,
+) -> list[dict]:
+    """One row per (machine phone, human phone) pairing for a single word.
+
+    A multi-phone espeak unit (one machine phone covering two human phones)
+    produces two rows that share the same machine score but keep their own
+    distinct human ground truth -- never averaged, never dropped. A machine
+    phone that aligns to nothing (an insertion relative to the corpus
+    transcription) contributes no row: there is no human score to compare it
+    against, and inventing one would be exactly the false precision design
+    section 10's fallback exists to avoid.
+    """
+    human_phones = human_word.get("phones", [])
+    human_scores = human_word.get("phones-accuracy", [])
+    human_subs = {entry["index"]: entry for entry in human_word.get("mispronunciations", [])}
+    machine_phones = machine_word.get("phones") or []
+    machine_ipa = [phone["ipa"] for phone in machine_phones]
+
+    alignment = align_ipa_to_arpabet(machine_ipa, human_phones)
+    rows: list[dict] = []
+    for machine_index, human_indices in enumerate(alignment):
+        machine_phone = machine_phones[machine_index]
+        substituted_ipa = machine_phone.get("substituted")
+        machine_sub_arpabet = "+".join(ipa_to_arpabet(substituted_ipa)) if substituted_ipa else ""
+        for human_index in human_indices:
+            sub_entry = human_subs.get(human_index)
+            rows.append(
+                {
+                    **BLANK_ROW,
+                    "model": model,
+                    "level": "phoneme",
+                    "utt_id": utt_id,
+                    "word_index": str(word_index),
+                    "phone_index": str(human_index),
+                    "ipa": machine_phone["ipa"],
+                    "arpabet": strip_stress(human_phones[human_index]),
+                    "human": str(human_scores[human_index]),
+                    "machine": str(machine_phone["score"]),
+                    "human_sub": strip_stress(sub_entry["pronounced-phone"]) if sub_entry else "",
+                    "machine_sub": substituted_ipa or "",
+                    "machine_sub_arpabet": machine_sub_arpabet,
+                }
+            )
+    return rows
+
+
+def build_utterance_rows(model: str, utt_id: str, human_record: dict, machine_report: dict) -> list[dict]:
+    """All rows for one utterance: one utterance row plus every word's phoneme rows.
+
+    Raises ValueError on a word-count mismatch between the corpus transcription
+    and what the sidecar actually segmented -- callers must turn that into an
+    error_row rather than zipping mismatched lists and silently mis-scoring
+    every word after the divergence point.
+    """
+    human_words = human_record["words"]
+    machine_words = machine_report["words"]
+    if len(human_words) != len(machine_words):
+        raise ValueError(
+            f"word count mismatch for {utt_id}: corpus has {len(human_words)}, "
+            f"sidecar returned {len(machine_words)}"
+        )
+    rows = [utterance_row(model, utt_id, human_record["accuracy"], machine_report["overall"]["accuracy"])]
+    for index, (human_word, machine_word) in enumerate(zip(human_words, machine_words)):
+        rows.extend(phoneme_rows(model, utt_id, index, human_word, machine_word))
+    return rows
+```
+
+**Step 4 — run it and watch it pass.**
+
+```powershell
+tools/calibration/.venv/Scripts/python.exe -m pytest tools/calibration/tests/test_record_transform.py -q
+```
+
+Expected: `9 passed`.
+
+**Step 5 — commit.**
+
+```powershell
+git -C C:/talker/.claude/worktrees/kern-brand-product-assets-5f587e add tools/calibration/record_transform.py tools/calibration/tests/test_record_transform.py
+git -C C:/talker/.claude/worktrees/kern-brand-product-assets-5f587e show :tools/calibration/record_transform.py | Select-String -Pattern "def build_utterance_rows"
+git -C C:/talker/.claude/worktrees/kern-brand-product-assets-5f587e commit -m "feat(calibration): map speechocean762 records + sidecar reports to CSV rows"
+```
+
+---
+
+### Task 14: `run_calibration.py` — the corpus loop, CSV writer, and CLI
+
+**Files:**
+- Create: `tools/calibration/run_calibration.py`
+- Test: `tools/calibration/tests/test_run_calibration.py`
+
+**Interfaces:**
+- Produces:
+  - `DATASET_ID: str` (`"mispeech/speechocean762"`), `DEFAULT_SPLIT: str` (`"test"`)
+  - `def iter_records(split: str = DEFAULT_SPLIT, limit: int | None = None)` — generator; imports
+    `datasets` **inside the function body**, not at module level, so importing this module never
+    triggers a corpus download
+  - `def process_record(model: str, base_url: str, record: dict, *, timeout: float = 60.0) -> list[dict]`
+    — never raises; a sidecar failure or word-count mismatch becomes an `error_row` instead
+  - `def write_rows(path, rows, *, header: bool) -> None`
+  - `def run(*, model: str, base_url: str, records, out_path, timeout: float = 60.0) -> dict` —
+    takes an already-obtained `records` iterable (dependency injection so tests never touch
+    `iter_records`/`datasets`); returns `{"scored": int, "failed": int, "total": int}`
+  - `def main(argv: list[str] | None = None) -> int`
+- Consumes: `sidecar_client.{encode_wav, call_assess, check_health, SidecarError}`,
+  `record_transform.{build_utterance_rows, error_row}`, `correlate.REQUIRED_COLUMNS`.
+
+**Step 1 — write the failing test.**
+
+Create `tools/calibration/tests/test_run_calibration.py`:
+
+```python
+"""run_calibration tests. `records` is always a plain in-memory list here --
+iter_records's real datasets.load_dataset call is exercised by nothing in this
+suite, by design (see the module docstring)."""
+import csv
+import sys
+from pathlib import Path
+from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from sidecar_client import SidecarError  # noqa: E402
+
+from run_calibration import main, process_record, run, write_rows  # noqa: E402
+
+
+def _record(utt_id="test-00001", accuracy=8, word_count=1):
+    return {
+        "utt_id": utt_id,
+        "accuracy": accuracy,
+        "text": "hi",
+        "words": [{"phones": ["HH"], "phones-accuracy": [2.0], "mispronunciations": []}] * word_count,
+        "audio": {"array": [0.0, 0.1, -0.1], "sampling_rate": 16000},
+    }
+
+
+def _report(accuracy=80, word_count=1):
+    return {
+        "overall": {"accuracy": accuracy},
+        "words": [{"phones": [{"ipa": "h", "score": 80}]}] * word_count,
+    }
+
+
+def test_process_record_returns_utterance_and_phoneme_rows_on_success():
+    with patch("run_calibration.call_assess", return_value=_report()):
+        rows = process_record("facebook", "http://localhost:8899", _record())
+    assert any(r["level"] == "utterance" for r in rows)
+    assert any(r["level"] == "phoneme" for r in rows)
+    assert all(r["error_code"] == "" for r in rows)
+
+
+def test_process_record_returns_an_error_row_on_a_sidecar_error():
+    with patch("run_calibration.call_assess", side_effect=SidecarError("NO_SPEECH", "quiet", 422)):
+        rows = process_record("facebook", "http://localhost:8899", _record())
+    assert len(rows) == 1
+    assert rows[0]["level"] == "error"
+    assert rows[0]["error_code"] == "NO_SPEECH"
+
+
+def test_process_record_returns_an_error_row_on_a_word_count_mismatch():
+    with patch("run_calibration.call_assess", return_value=_report(word_count=2)):
+        rows = process_record("facebook", "http://localhost:8899", _record(word_count=1))
+    assert len(rows) == 1
+    assert rows[0]["level"] == "error"
+    assert rows[0]["error_code"] == "WORD_COUNT_MISMATCH"
+
+
+def test_write_rows_writes_the_header_and_every_row(tmp_path):
+    from correlate import REQUIRED_COLUMNS
+    from record_transform import BLANK_ROW
+
+    path = tmp_path / "out.csv"
+    write_rows(path, [{**BLANK_ROW, "model": "facebook", "utt_id": "a"}], header=True)
+    with path.open(encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert rows[0]["model"] == "facebook"
+    assert list(rows[0]) == list(REQUIRED_COLUMNS)
+
+
+def test_run_scores_every_record_and_returns_a_summary(tmp_path):
+    records = [_record(utt_id="test-00001"), _record(utt_id="test-00002")]
+    with patch("run_calibration.call_assess", return_value=_report()):
+        summary = run(
+            model="facebook",
+            base_url="http://localhost:8899",
+            records=records,
+            out_path=tmp_path / "scores.csv",
+        )
+    assert summary == {"scored": 2, "failed": 0, "total": 2}
+    with (tmp_path / "scores.csv").open(encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert sum(1 for r in rows if r["level"] == "utterance") == 2
+
+
+def test_run_counts_a_sidecar_failure_as_failed_not_a_crash(tmp_path):
+    records = [_record(utt_id="test-00001")]
+    with patch("run_calibration.call_assess", side_effect=SidecarError("NO_SPEECH", "quiet", 422)):
+        summary = run(
+            model="facebook",
+            base_url="http://localhost:8899",
+            records=records,
+            out_path=tmp_path / "scores.csv",
+        )
+    assert summary == {"scored": 0, "failed": 1, "total": 1}
+
+
+def test_main_fails_fast_when_the_sidecar_is_unreachable(tmp_path, capsys):
+    with patch(
+        "run_calibration.check_health",
+        side_effect=SidecarError("UNREACHABLE", "refused", 0),
+    ):
+        code = main(["--sidecar-url", "http://localhost:8899", "--out", str(tmp_path / "out.csv")])
+    assert code == 1
+    assert "unreachable" in capsys.readouterr().out.lower()
+
+
+def test_main_uses_the_health_reported_model_as_the_label_by_default(tmp_path, capsys):
+    with (
+        patch("run_calibration.check_health", return_value={"status": "ok", "model": "facebook/x"}),
+        patch("run_calibration.iter_records", return_value=[_record()]),
+        patch("run_calibration.call_assess", return_value=_report()),
+    ):
+        code = main(["--out", str(tmp_path / "out.csv"), "--limit", "1"])
+    assert code == 0
+    with (tmp_path / "out.csv").open(encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert rows[0]["model"] == "facebook/x"
+
+
+def test_main_respects_an_explicit_model_label_override(tmp_path):
+    with (
+        patch("run_calibration.check_health", return_value={"status": "ok", "model": "facebook/x"}),
+        patch("run_calibration.iter_records", return_value=[_record()]),
+        patch("run_calibration.call_assess", return_value=_report()),
+    ):
+        main(["--out", str(tmp_path / "out.csv"), "--model-label", "candidate-b", "--limit", "1"])
+    with (tmp_path / "out.csv").open(encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert rows[0]["model"] == "candidate-b"
+```
+
+**Step 2 — run it and watch it fail.**
+
+```powershell
+tools/calibration/.venv/Scripts/python.exe -m pytest tools/calibration/tests/test_run_calibration.py -q
+```
+
+Expected failure:
+
+```
+E   ModuleNotFoundError: No module named 'run_calibration'
+```
+
+**Step 3 — implement.**
+
+Create `tools/calibration/run_calibration.py`:
+
+```python
+"""Iterate speechocean762, score each utterance with the local sidecar, and
+write the CSV correlate.py analyzes.
+
+`datasets` is imported lazily inside iter_records so importing this module (or
+running its unit tests) never triggers a corpus download -- every test in
+tools/calibration/tests/test_run_calibration.py passes plain in-memory record
+lists to run()/process_record() directly.
+
+Usage:
+  # start the sidecar container first (Plan 1), then:
+  python tools/calibration/run_calibration.py --out tools/calibration/out/facebook.csv
+  python tools/calibration/run_calibration.py --limit 20 --out tools/calibration/out/smoke.csv
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import os
+import sys
+from pathlib import Path
+
+from correlate import REQUIRED_COLUMNS
+from record_transform import build_utterance_rows, error_row
+from sidecar_client import SidecarError, call_assess, check_health, encode_wav
+
+DATASET_ID = "mispeech/speechocean762"
+DEFAULT_SPLIT = "test"
+
+
+def iter_records(split: str = DEFAULT_SPLIT, limit: int | None = None):
+    """Yield raw speechocean762 records. Imported lazily -- see module docstring."""
+    import datasets  # noqa: PLC0415
+
+    dataset = datasets.load_dataset(DATASET_ID, split=split)
+    for index, record in enumerate(dataset):
+        if limit is not None and index >= limit:
+            return
+        record = dict(record)
+        record.setdefault("utt_id", f"{split}-{index:05d}")
+        yield record
+
+
+def process_record(model: str, base_url: str, record: dict, *, timeout: float = 60.0) -> list[dict]:
+    """Score one utterance. Never raises: any failure becomes a single error_row
+    so one bad utterance cannot abort a multi-hour corpus run."""
+    utt_id = record["utt_id"]
+    try:
+        audio = record["audio"]
+        wav_bytes = encode_wav(audio["array"], audio["sampling_rate"])
+        report = call_assess(base_url, wav_bytes, record["text"], timeout=timeout)
+        return build_utterance_rows(model, utt_id, record, report)
+    except SidecarError as exc:
+        return [error_row(model, utt_id, exc.code)]
+    except ValueError:
+        return [error_row(model, utt_id, "WORD_COUNT_MISMATCH")]
+    except Exception:  # noqa: BLE001 -- a corpus run must survive one bad record
+        return [error_row(model, utt_id, "INTERNAL")]
+
+
+def write_rows(path: Path, rows, *, header: bool) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    mode = "w" if header else "a"
+    with path.open(mode, newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(REQUIRED_COLUMNS))
+        if header:
+            writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+
+
+def run(*, model: str, base_url: str, records, out_path, timeout: float = 60.0) -> dict:
+    """Score every record, writing rows incrementally so a late failure does
+    not lose everything scored so far. Returns a scored/failed/total summary."""
+    scored = 0
+    failed = 0
+    for index, record in enumerate(records):
+        rows = process_record(model, base_url, record, timeout=timeout)
+        write_rows(out_path, rows, header=(index == 0))
+        if any(row["level"] == "error" for row in rows):
+            failed += 1
+        else:
+            scored += 1
+    return {"scored": scored, "failed": failed, "total": scored + failed}
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Score speechocean762 with the local pronunciation sidecar."
+    )
+    parser.add_argument("--sidecar-url", default=os.environ.get("PRON_URL", "http://localhost:8899"))
+    parser.add_argument("--split", default=DEFAULT_SPLIT)
+    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--model-label", default=None, help="defaults to /health's reported model id")
+    parser.add_argument("--timeout", type=float, default=60.0)
+    args = parser.parse_args(argv)
+
+    try:
+        health = check_health(args.sidecar_url, timeout=args.timeout)
+    except SidecarError as exc:
+        print(f"sidecar unreachable at {args.sidecar_url}: {exc.message}")
+        return 1
+
+    model = args.model_label or health.get("model", "unknown")
+    records = iter_records(split=args.split, limit=args.limit)
+    summary = run(model=model, base_url=args.sidecar_url, records=records, out_path=args.out, timeout=args.timeout)
+    print(f"model={model} scored={summary['scored']} failed={summary['failed']} total={summary['total']}")
+    print(f"wrote {args.out}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+**Step 4 — run it and watch it pass.**
+
+```powershell
+tools/calibration/.venv/Scripts/python.exe -m pytest tools/calibration/tests/test_run_calibration.py -q
+```
+
+Expected: `8 passed`.
+
+Then run the whole `tools/calibration` suite to confirm nothing regressed:
+
+```powershell
+tools/calibration/.venv/Scripts/python.exe -m pytest tools/calibration/tests -q
+```
+
+Expected: `64 passed` (6 arpabet-ipa mapping + 14 arpabet-ipa alignment + 39 correlate + 8 sidecar_client
++ 9 record_transform + 8 run_calibration — total shifts if you added cases; zero failures is what matters).
+
+**Step 5 — commit.**
+
+```powershell
+git -C C:/talker/.claude/worktrees/kern-brand-product-assets-5f587e add tools/calibration/run_calibration.py tools/calibration/tests/test_run_calibration.py
+git -C C:/talker/.claude/worktrees/kern-brand-product-assets-5f587e show :tools/calibration/run_calibration.py | Select-String -Pattern "def main"
+git -C C:/talker/.claude/worktrees/kern-brand-product-assets-5f587e commit -m "feat(calibration): the corpus-scoring loop, CSV writer, and CLI"
+```
+
+---
+
+### Task 15: Phoneme-coverage tests for the already-shipped `drills.v1.json`
+
+**Supersedes Tasks 1-3's literal content** (see the addendum note above Task 12): the content those
+tasks specify was already built independently during Plan 2 and is already live in the client. This
+task builds the test suite Tasks 1-3 would have produced — full phoneme-coverage verification — and
+points it at the content that actually exists, instead of overwriting shipped content with a
+redundant alternate set.
+
+**Files:**
+- Create: `server/src/content/drills.v1.test.js`
+
+**Interfaces:**
+- Consumes: `server/src/content/drills.v1.json` (already exists, untouched by this task).
+- Produces: no exports — this is a pure test file.
+
+**Step 1 — read the real content first.**
+
+```powershell
+node -e "const c=require('C:/talker/.claude/worktrees/kern-brand-product-assets-5f587e/server/src/content/drills.v1.json'); console.log(JSON.stringify(c, null, 2))" > /tmp/drills-dump.json
+```
+
+(Or open the file directly.) Note every prompt's `id`, `focus`, `text`, `ipaTargets`, `keyWords`,
+`contrast`, `level` — you will build an `IPA_LEXICON` covering every distinct `keyWord` across all 21
+prompts (there are 60 in the version this task was written against; verify your own copy of the file
+matches or extend the list to match whatever is actually there).
+
+**Step 2 — write the test.**
+
+Create `server/src/content/drills.v1.test.js`, following this shape exactly (the `FOCUS_ORDER` /
+`FOCUS_TARGETS` / `FOCUS_CONTRAST` / `TARGET_TOKENS` / `wordsOf` / `tokensFor` / `ipaContains`
+helpers are unchanged from design section 5's table — reuse them verbatim from Task 1's text above,
+they do not depend on which sentences are used):
+
+```jsx
+import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+
+const CONTENT = JSON.parse(
+  readFileSync(new URL("./drills.v1.json", import.meta.url), "utf8"),
+);
+
+const FOCUS_ORDER = Object.freeze([
+  "ih-iy",
+  "ae",
+  "schwa",
+  "v-b",
+  "dzh",
+  "s-cluster",
+  "ed-ending",
+]);
+
+const FOCUS_TARGETS = Object.freeze({
+  "ih-iy": ["ɪ", "iː"],
+  ae: ["æ"],
+  schwa: ["ə"],
+  "v-b": ["v", "b"],
+  dzh: ["dʒ"],
+  "s-cluster": ["s"],
+  "ed-ending": ["t", "d", "ɪd"],
+});
+
+const FOCUS_CONTRAST = Object.freeze({
+  "ih-iy": "vowel length + quality",
+  ae: "absent in Spanish",
+  schwa: "schwa reduction in unstressed syllables",
+  "v-b": "phonemic in English, allophonic in Spanish",
+  dzh: "affricate absent in Spanish",
+  "s-cluster": "Spanish epenthesis (spain -> espain)",
+  "ed-ending": "/t/ /d/ /ɪd/ allomorphy",
+});
+
+// `ɪd` is a two-token sequence in the espeak inventory, not a single vocab entry.
+const TARGET_TOKENS = Object.freeze({ ɪd: ["ɪ", "d"] });
+
+// Reference en-us espeak transcriptions for every keyWord actually used across
+// drills.v1.json's 21 prompts. Curated by hand (espeak-ng cannot run in Node);
+// PENDING VERIFICATION against the real espeak-ng backend once the sidecar
+// container can be built and run (Plan 1's Docker tasks are deferred) --
+// treat any failure here after that verification as a real content bug, not a
+// test bug.
+const IPA_LEXICON = Object.freeze({
+  // <IMPLEMENTER: fill in one entry per distinct keyWord in the real file,
+  // space-separated IPA tokens matching the style already used in Tasks 1-3
+  // above, e.g. ship: "ʃ ɪ p". Do not guess at words not present in the file
+  // -- read it first, per Step 1.>
+});
+
+const LEVELS = Object.freeze(["A2", "B1", "B2", "C1"]);
+
+const wordsOf = (text) =>
+  text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}'-]+/gu, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+
+const tokensFor = (target) => TARGET_TOKENS[target] ?? [target];
+
+const ipaContains = (ipa, target) =>
+  ` ${ipa} `.includes(` ${tokensFor(target).join(" ")} `);
+
+describe("drills.v1.json — file shape", () => {
+  it("declares version 1, an ISO date, and the seven frozen focus slugs", () => {
+    expect(CONTENT.version).toBe(1);
+    expect(CONTENT.updated).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(CONTENT.focuses).toEqual(FOCUS_ORDER);
+  });
+
+  it("gives every prompt a unique id prefixed with its own focus", () => {
+    const seen = new Set();
+    for (const p of CONTENT.prompts) {
+      expect(CONTENT.focuses).toContain(p.focus);
+      expect(p.id.startsWith(`${p.focus}-`)).toBe(true);
+      expect(seen.has(p.id)).toBe(false);
+      seen.add(p.id);
+    }
+  });
+
+  it("gives every prompt the frozen ipaTargets and contrast for its focus", () => {
+    for (const p of CONTENT.prompts) {
+      expect(p.ipaTargets).toEqual(FOCUS_TARGETS[p.focus]);
+      expect(p.contrast).toBe(FOCUS_CONTRAST[p.focus]);
+    }
+  });
+
+  it("keeps every sentence unique, under 300 chars, at a known CEFR level", () => {
+    const texts = CONTENT.prompts.map((p) => p.text);
+    expect(new Set(texts).size).toBe(texts.length);
+    for (const p of CONTENT.prompts) {
+      expect(p.text.length).toBeGreaterThan(0);
+      expect(p.text.length).toBeLessThanOrEqual(300);
+      expect(LEVELS).toContain(p.level);
+    }
+  });
+});
+
+describe("drills.v1.json — phoneme coverage", () => {
+  it("keeps every keyWord as a real word of its own sentence", () => {
+    for (const p of CONTENT.prompts) {
+      const words = wordsOf(p.text);
+      for (const kw of p.keyWords) {
+        expect(words, `${p.id} keyWord "${kw}"`).toContain(kw.toLowerCase());
+      }
+    }
+  });
+
+  it("has a reference transcription for every keyWord", () => {
+    for (const p of CONTENT.prompts) {
+      for (const kw of p.keyWords) {
+        expect(
+          Object.keys(IPA_LEXICON),
+          `${p.id} keyWord "${kw}"`,
+        ).toContain(kw.toLowerCase());
+      }
+    }
+  });
+
+  it("puts every declared target phoneme in a keyWord of the same prompt", () => {
+    for (const p of CONTENT.prompts) {
+      for (const target of p.ipaTargets) {
+        const carrier = p.keyWords.find((kw) =>
+          ipaContains(IPA_LEXICON[kw.toLowerCase()] ?? "", target),
+        );
+        expect(
+          carrier,
+          `${p.id} declares "${target}" but no keyWord pronounces it`,
+        ).toBeDefined();
+      }
+    }
+  });
+});
+
+describe("drills.v1.json — set size", () => {
+  it("ships at least 3 prompts for every declared focus", () => {
+    for (const focus of CONTENT.focuses) {
+      const n = CONTENT.prompts.filter((p) => p.focus === focus).length;
+      expect(n, `prompts for focus "${focus}"`).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  it("ships at least 21 prompts in total", () => {
+    expect(CONTENT.prompts.length).toBeGreaterThanOrEqual(21);
+  });
+
+  it("covers /t/, /d/ and /ɪd/ in every ed-ending prompt", () => {
+    const ed = CONTENT.prompts.filter((p) => p.focus === "ed-ending");
+    expect(ed.length).toBeGreaterThanOrEqual(3);
+    for (const p of ed) {
+      for (const target of ["t", "d", "ɪd"]) {
+        const carrier = p.keyWords.find((kw) =>
+          ipaContains(IPA_LEXICON[kw.toLowerCase()] ?? "", target),
+        );
+        expect(carrier, `${p.id} is missing an -ed /${target}/ carrier`).toBeDefined();
+      }
+    }
+  });
+});
+```
+
+Fill in `IPA_LEXICON` for every real `keyWord` before running — the test file above will fail loudly
+(`toContain` on `Object.keys(IPA_LEXICON)`) for any word you missed, which is the point: it cannot
+pass with a silently-incomplete lexicon.
+
+**Step 3 — run it and watch it pass.**
+
+```powershell
+npm --prefix server test -- src/content/drills.v1.test.js
+```
+
+Expected: every test passes, in particular "puts every declared target phoneme in a keyWord of the
+same prompt" — this is the assertion that actually validates the content, and a wrong transcription
+here is a real content bug you must fix in `IPA_LEXICON`, not the JSON (the JSON is unmodified by
+this task).
+
+Then run the whole server suite:
+
+```powershell
+npm --prefix server test
+```
+
+Expected: every pre-existing server test file still passes.
+
+**Step 4 — commit.**
+
+```powershell
+git -C C:/talker/.claude/worktrees/kern-brand-product-assets-5f587e add server/src/content/drills.v1.test.js
+git -C C:/talker/.claude/worktrees/kern-brand-product-assets-5f587e show :server/src/content/drills.v1.test.js | Select-String -Pattern "IPA_LEXICON"
+git -C C:/talker/.claude/worktrees/kern-brand-product-assets-5f587e commit -m "test(pron): phoneme-coverage suite for the shipped drill content"
+```
+
+`drills.v1.json` itself must **not** appear in `git diff --cached --name-only` — this task adds a
+test, it does not touch content.
+
+---
+
+### Task 16: `tools/calibration/README.md` — how to run the harness, and what it cannot do yet
+
+**Files:**
+- Create: `tools/calibration/README.md`
+
+**Interfaces:** none — documentation only.
+
+**Step 1 — write it.**
+
+Create `tools/calibration/README.md`:
+
+```markdown
+# Pronunciation calibration harness
+
+Measures whether the local sidecar's scores agree with human raters on
+**speechocean762** (5,000 non-native English utterances, 5 human raters per
+utterance). This is the deliverable design section 8 calls "what makes the
+numbers defensible" — until it has actually been run against a live sidecar,
+treat any pronunciation score in the product as unverified.
+
+## Status: code complete, not yet run against a live sidecar
+
+The sidecar (`docs/superpowers/plans/2026-07-27-pronunciation-1-sidecar.md`)
+has never been built or started in this environment — its own Task 4 (Docker
+image) and Tasks 13-14 (run it, golden-fixture integration test) are deferred
+pending Docker Desktop. Every module here is fully unit-tested against mocked
+HTTP calls and fake in-memory records (no network, no corpus download in any
+test), but **no real corpus run has happened**. Do not read "the tests pass"
+as "the model is calibrated" — those are different claims.
+
+## One-time setup
+
+```powershell
+cd C:/talker/.claude/worktrees/kern-brand-product-assets-5f587e
+python -m venv tools/calibration/.venv
+tools/calibration/.venv/Scripts/python.exe -m pip install --upgrade pip
+tools/calibration/.venv/Scripts/python.exe -m pip install -r tools/calibration/requirements.txt
+```
+
+Record what actually resolved (do this once, after the first successful install, and paste the
+`scipy`/`numpy`/`pandas`/`datasets` lines below):
+
+```
+<PASTE the load-bearing lines from `pip freeze` here after the first install>
+```
+
+## Running it (once the sidecar container exists and is running on :8899)
+
+```powershell
+# 1. Start the sidecar (Plan 1) with whichever candidate model you're evaluating:
+#      docker run --rm -d --name speakup-pron -p 8899:8899 -e PRON_MODEL=<model-id> speakup-pron
+# 2. Smoke-test with a handful of utterances first -- a full run over 2,500 is slow:
+tools/calibration/.venv/Scripts/python.exe tools/calibration/run_calibration.py --limit 20 --out tools/calibration/out/smoke.csv
+# 3. Full run:
+tools/calibration/.venv/Scripts/python.exe tools/calibration/run_calibration.py --out tools/calibration/out/facebook.csv
+# 4. Repeat 1-3 with a second candidate model (a different --model-label or, more simply,
+#    let it default to whatever /health reports for the currently-running container):
+tools/calibration/.venv/Scripts/python.exe tools/calibration/run_calibration.py --out tools/calibration/out/candidate-b.csv
+# 5. Compare and select:
+tools/calibration/.venv/Scripts/python.exe tools/calibration/correlate.py tools/calibration/out/facebook.csv tools/calibration/out/candidate-b.csv --out tools/calibration/out/verdict.json
+```
+
+`verdict.json`'s `selected` field is the model to put in `PRON_MODEL`; `showNumericScores` says
+whether the product may display numbers at all (design section 10's honest fallback — when false,
+the client reports `substituted` phonemes and hides scores instead).
+
+## Pass/fail thresholds (see `correlate.py`)
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `PASS_MIN_COVERAGE` | 0.80 | below this, the model is `DISQUALIFIED` before correlation is even considered |
+| `PASS_MIN_UTTERANCE_PEARSON` | 0.60 | utterance-level linear agreement required to show numeric scores |
+| `PASS_MIN_PHONEME_SPEARMAN` | 0.35 | phoneme-level rank agreement required alongside it (lower ceiling: 3-point human labels averaged over 5 raters) |
+| `FALLBACK_MIN_SUBSTITUTION_F1` | 0.30 | below this even the substitutions-only fallback is not honest |
+| `MIN_SAMPLES` | 30 | fewer pairs than this is not evidence of anything |
+
+## Module map
+
+| File | Job |
+|---|---|
+| `sidecar_client.py` | HTTP client to the sidecar's `/assess` and `/health` — WAV encoding, typed errors |
+| `arpabet_ipa.py` | ARPAbet (speechocean762) <-> espeak IPA (sidecar) mapping and sequence alignment |
+| `record_transform.py` | One speechocean762 record + one sidecar report -> CSV rows |
+| `run_calibration.py` | The corpus loop: iterate speechocean762, call the sidecar, write the CSV |
+| `correlate.py` | Read the CSV, compute correlation, apply the pass/fail/fallback thresholds, select a model |
+```
+
+**Step 2 — commit.**
+
+```powershell
+git -C C:/talker/.claude/worktrees/kern-brand-product-assets-5f587e add tools/calibration/README.md
+git -C C:/talker/.claude/worktrees/kern-brand-product-assets-5f587e show :tools/calibration/README.md | Select-String -Pattern "Status: code complete"
+git -C C:/talker/.claude/worktrees/kern-brand-product-assets-5f587e commit -m "docs(calibration): README covering setup, running, thresholds, and current status"
+```
+
+---
