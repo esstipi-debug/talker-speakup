@@ -2,9 +2,23 @@
 # versions get recorded in README.md after the first successful install, per
 # verification step V4. `datasets` is imported lazily inside
 # run_calibration.iter_records so the unit tests need no corpus download.
-datasets>=4,<5
+#
+# datasets is pinned below 4 deliberately: 4.x requires the optional
+# `torchcodec` package (not installed here -- this harness stays lightweight,
+# unlike the sidecar which already needs torch for its own reasons) to decode
+# Audio columns at all, and even with torchcodec installed the result is a
+# decoder object rather than the {"array", "sampling_rate"} dict shape
+# process_record() assumes. See test_datasets_audio_contract.py.
+#
+# librosa and soundfile are not optional here even though pip lists them as
+# datasets' optional "audio" extra: datasets 3.x's Audio.decode_example()
+# unconditionally imports both (see .venv's datasets/features/audio.py) --
+# without them, iter_records fails with a different ImportError than
+# torchcodec's, not a working dict-shape decode. Still no torch/GPU deps.
+datasets>=3.6,<4
+librosa>=0.10,<1
+soundfile>=0.12,<1
 requests>=2.32,<3
 scipy>=1.14,<2
 numpy>=2.1,<3
-pandas>=2.2,<3
 pytest>=8,<10

@@ -72,7 +72,14 @@ def write_rows(path: Path, rows, *, header: bool) -> None:
 
 def run(*, model: str, base_url: str, records, out_path, timeout: float = 60.0) -> dict:
     """Score every record, writing rows incrementally so a late failure does
-    not lose everything scored so far. Returns a scored/failed/total summary."""
+    not lose everything scored so far. Returns a scored/failed/total summary.
+
+    Callers (main()) must treat total > 0 and scored == 0 as a systemic
+    failure signal -- every record failing for the same reason (wrong
+    dependency version, sidecar unreachable mid-run, corrupted corpus slice)
+    looks identical in this summary to independently bad utterances, but
+    means something entirely different.
+    """
     scored = 0
     failed = 0
     for index, record in enumerate(records):
@@ -107,7 +114,16 @@ def main(argv: list[str] | None = None) -> int:
     records = iter_records(split=args.split, limit=args.limit)
     summary = run(model=model, base_url=args.sidecar_url, records=records, out_path=args.out, timeout=args.timeout)
     print(f"model={model} scored={summary['scored']} failed={summary['failed']} total={summary['total']}")
-    print(f"wrote {args.out}")
+    if summary["total"] > 0:
+        print(f"wrote {args.out}")
+    if summary["total"] > 0 and summary["scored"] == 0:
+        print(
+            f"WARNING: every one of {summary['total']} records failed to score — this usually means a\n"
+            f"systemic problem (wrong dependency version, unreachable sidecar mid-run, corrupted corpus\n"
+            f"slice), not {summary['total']} independently bad utterances. Inspect {args.out} before trusting\n"
+            f"any verdict derived from it."
+        )
+        return 1
     return 0
 
 

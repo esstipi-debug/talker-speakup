@@ -11,10 +11,22 @@ treat any pronunciation score in the product as unverified.
 The sidecar (`docs/superpowers/plans/2026-07-27-pronunciation-1-sidecar.md`)
 has never been built or started in this environment — its own Task 4 (Docker
 image) and Tasks 13-14 (run it, golden-fixture integration test) are deferred
-pending Docker Desktop. Every module here is fully unit-tested against mocked
-HTTP calls and fake in-memory records (no network, no corpus download in any
-test), but **no real corpus run has happened**. Do not read "the tests pass"
-as "the model is calibrated" — those are different claims.
+pending Docker Desktop. Every module except `iter_records` is unit-tested
+against mocked HTTP calls and fake in-memory records (no network, no corpus
+download in any test); `iter_records` (the corpus loader in
+`run_calibration.py`) is untested and unexercised by this test suite — it is
+the one seam a first real run will validate, and the one that broke silently
+once already (see `tests/test_datasets_audio_contract.py`, which pins the
+`datasets` library's Audio-decode contract without ever downloading the real
+corpus). Do not read "the tests pass" as "the model is calibrated" — those
+are different claims.
+
+speechocean762's human ratings and the sidecar's scores use deliberately
+different numeric scales: utterance accuracy is rated roughly 0-10 and phone
+accuracy roughly 0-2 by human raters, while the sidecar reports 0-100. This is
+safe because `correlate.py` only ever computes rank/linear correlation
+(Pearson/Spearman) between the two series — never a difference or ratio
+between a human score and a sidecar score.
 
 ## One-time setup
 
@@ -25,12 +37,25 @@ tools/calibration/.venv/Scripts/python.exe -m pip install --upgrade pip
 tools/calibration/.venv/Scripts/python.exe -m pip install -r tools/calibration/requirements.txt
 ```
 
-Record what actually resolved (do this once, after the first successful install, and paste the
-`scipy`/`numpy`/`pandas`/`datasets` lines below):
+What actually resolved (from `pip freeze` after installing the pinned `datasets<4` series --
+`datasets` 4.x requires the optional `torchcodec` package to decode audio at all, and even with
+it installed returns a decoder object instead of the `{"array", "sampling_rate"}` dict shape
+`run_calibration.process_record()` assumes; see `tests/test_datasets_audio_contract.py`.
+`librosa` and `soundfile` are listed separately because `datasets<4`'s Audio feature
+unconditionally imports both to decode, even though pip treats them as an optional extra):
 
 ```
-<PASTE the load-bearing lines from `pip freeze` here after the first install>
+datasets==3.6.0
+librosa==0.11.0
+numpy==2.4.6
+pytest==9.1.1
+requests==2.34.2
+scipy==1.17.1
+soundfile==0.14.0
 ```
+
+(`pandas` is pulled in transitively by `datasets` itself but is not a direct dependency of any
+module in this package — nothing here imports it.)
 
 ## Running it (once the sidecar container exists and is running on :8899)
 

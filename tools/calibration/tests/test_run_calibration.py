@@ -126,3 +126,42 @@ def test_main_respects_an_explicit_model_label_override(tmp_path):
     with (tmp_path / "out.csv").open(encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
     assert rows[0]["model"] == "candidate-b"
+
+
+def test_main_returns_1_and_warns_when_every_record_fails_the_same_way(tmp_path, capsys):
+    """A systemic failure (wrong dependency version, sidecar down mid-run, corrupted
+    corpus slice) makes every record fail identically -- that must never look like a
+    normal completed run with a quietly empty CSV of 0% coverage."""
+    records = [_record(utt_id="test-00001"), _record(utt_id="test-00002")]
+    with (
+        patch("run_calibration.check_health", return_value={"status": "ok", "model": "facebook/x"}),
+        patch("run_calibration.iter_records", return_value=records),
+        patch("run_calibration.call_assess", side_effect=SidecarError("NO_SPEECH", "quiet", 422)),
+    ):
+        code = main(["--out", str(tmp_path / "out.csv"), "--limit", "2"])
+    assert code == 1
+    out = capsys.readouterr().out.lower()
+    assert "warning" in out
+    assert "systemic" in out
+
+
+def test_run_returns_a_summary_with_zero_scored_when_every_record_fails_the_same_way(tmp_path):
+    records = [_record(utt_id="test-00001"), _record(utt_id="test-00002")]
+    with patch("run_calibration.call_assess", side_effect=SidecarError("NO_SPEECH", "quiet", 422)):
+        summary = run(
+            model="facebook",
+            base_url="http://localhost:8899",
+            records=records,
+            out_path=tmp_path / "scores.csv",
+        )
+    assert summary == {"scored": 0, "failed": 2, "total": 2}
+
+
+def test_main_does_not_print_wrote_when_there_are_no_records(tmp_path, capsys):
+    with (
+        patch("run_calibration.check_health", return_value={"status": "ok", "model": "facebook/x"}),
+        patch("run_calibration.iter_records", return_value=[]),
+    ):
+        main(["--out", str(tmp_path / "out.csv"), "--limit", "0"])
+    out = capsys.readouterr().out.lower()
+    assert "wrote" not in out

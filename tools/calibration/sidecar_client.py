@@ -30,6 +30,13 @@ class SidecarError(Exception):
 def encode_wav(samples, sample_rate: int) -> bytes:
     """Float32 samples in [-1, 1] -> 16-bit PCM WAV bytes.
 
+    `samples`/`sample_rate` are the `record["audio"]["array"]` /
+    `record["audio"]["sampling_rate"]` pair -- the shape HuggingFace
+    datasets<4's Audio feature decodes to (see
+    test_datasets_audio_contract.py -- this is a version-specific contract,
+    not a stable API; datasets>=4 requires torchcodec and returns a decoder
+    object instead of this dict, which is why requirements.txt pins <4).
+
     ffmpeg (inside the sidecar's audio.decode_to_16k_mono) resamples on the
     way in, so the native speechocean762 sample rate is written as-is.
     """
