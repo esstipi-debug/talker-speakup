@@ -135,6 +135,16 @@ describe("pron factory — provider resolution", () => {
     });
     expect(getPron().guard.capUsd).toBe(0);
   });
+
+  it("falls back to the default cap when the env value is not a finite number", async () => {
+    // Number("not-a-number") is NaN, which is not finite — numberEnv() must not pass NaN through.
+    const { getPron } = await loadPron({
+      PRON_PROVIDER: "azure",
+      AZURE_SPEECH_KEY: "secret",
+      PRON_AZURE_MONTHLY_CAP_USD: "not-a-number",
+    });
+    expect(getPron().guard.capUsd).toBe(12);
+  });
 });
 
 describe("pron factory — memoization", () => {
