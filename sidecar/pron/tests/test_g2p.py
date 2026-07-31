@@ -87,3 +87,14 @@ def test_every_espeak_token_is_inside_the_model_vocabulary():
     words = ["sheep", "ship", "judge", "comfortable", "spain", "wanted"]
     oov = [t for tokens in phonemize_words(words) for t in tokens if t not in vocab]
     assert oov == []
+
+
+@pytest.mark.integration
+@requires_espeak
+def test_get_backend_is_memoized_per_language():
+    """Verify that get_backend returns the same object for identical language codes."""
+    from app.g2p import get_backend
+
+    first = get_backend("en-us")
+    second = get_backend("en-us")
+    assert first is second
