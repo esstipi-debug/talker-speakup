@@ -37,3 +37,7 @@ smalltalk2me-mirror/
 # python bytecode (docs/brand/generate-icons.py)
 __pycache__/
 *.pyc
+
+# pronunciation sidecar (model weights cache, pytest scratch)
+sidecar/pron/.model-cache/
+sidecar/pron/.pytest_cache/
