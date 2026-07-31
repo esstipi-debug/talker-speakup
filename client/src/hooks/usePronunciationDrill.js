@@ -144,6 +144,7 @@ export function usePronunciationDrill({ focus = null } = {}) {
     if (statusRef.current !== "prompt") return;
     setError(null);
     attemptSeqRef.current += 1;
+    const seq = attemptSeqRef.current;
     updateStatus("recording");
 
     const handle = await startRecorder({
@@ -159,8 +160,10 @@ export function usePronunciationDrill({ focus = null } = {}) {
       updateStatus("prompt");
       return;
     }
-    // The learner may have cancelled while the permission prompt was open.
-    if (statusRef.current !== "recording") {
+    // The learner may have cancelled while the permission prompt was open, or
+    // started a fresh attempt before this one resolved — either way, only the
+    // current generation may install its handle.
+    if (attemptSeqRef.current !== seq || statusRef.current !== "recording") {
       handle.cancel();
       return;
     }

@@ -7,6 +7,8 @@ let nextHandleNull = false; // force the next startRecording() -> null once
 let takeResult = null; // what the next handle.stop() resolves
 let lastHandle = null;
 let lastStartOpts = null;
+let controlStarts = false; // when true, startRecorder() parks instead of resolving immediately
+let startDeferred = []; // FIFO of resolver fns for parked startRecorder() calls, one per call
 
 function makeHandle() {
   let state = "recording";
@@ -39,6 +41,14 @@ vi.mock("../lib/recorder.js", async () => {
       if (nextHandleNull) {
         nextHandleNull = false;
         return null;
+      }
+      if (controlStarts) {
+        // Park this call; the test resolves it later (in whatever order it
+        // chooses) via startDeferred, so overlapping startRecording() calls
+        // can be made to resolve out of order.
+        return new Promise((resolve) => {
+          startDeferred.push(() => resolve(makeHandle()));
+        });
       }
       return makeHandle();
     },
@@ -110,6 +120,8 @@ beforeEach(() => {
   nextHandleNull = false;
   lastHandle = null;
   lastStartOpts = null;
+  controlStarts = false;
+  startDeferred = [];
   takeResult = { blob: new Blob(["take"]), durationMs: 1200 };
   getPronPrompts.mockReset();
   getPronPrompts.mockResolvedValue(PROMPTS);
@@ -513,6 +525,46 @@ describe("usePronunciationDrill — races", () => {
     act(() => result.current.cancelRecording());
     expect(handle2.cancel).toHaveBeenCalledTimes(1);
     expect(result.current.status).toBe("prompt");
+  });
+
+  it("cancels a stale startRecording handle instead of installing it after a newer attempt has moved on", async () => {
+    const { result } = await mounted();
+    controlStarts = true;
+
+    // Call #1: its startRecorder() (e.g. a slow getUserMedia) never resolves yet.
+    act(() => { result.current.startRecording(); });
+    await waitFor(() => expect(startDeferred).toHaveLength(1));
+
+    // The learner cancels before call #1's permission prompt resolves.
+    act(() => result.current.cancelRecording());
+    await waitFor(() => expect(result.current.status).toBe("prompt"));
+
+    // Call #2: a fresh attempt, also parked.
+    act(() => { result.current.startRecording(); });
+    await waitFor(() => expect(startDeferred).toHaveLength(2));
+
+    // Call #1 finally resolves first. Its own staleness check must catch that
+    // attemptSeqRef has moved on (past its own generation) and cancel the
+    // handle rather than installing it into recorderRef, even though `status`
+    // reads "recording" again (set by call #2).
+    await act(async () => { startDeferred[0](); });
+    const handle1 = lastHandle;
+
+    // Call #2 resolves next and becomes the live handle.
+    await act(async () => { startDeferred[1](); });
+    const handle2 = lastHandle;
+
+    expect(handle2).not.toBe(handle1);
+    expect(handle1.cancel).toHaveBeenCalledTimes(1); // orphaned handle released, not left dangling
+    expect(handle2.cancel).not.toHaveBeenCalled();
+    expect(result.current.status).toBe("recording");
+
+    // recorderRef must hold handle2: stopping now stops the real, in-progress
+    // take, not the stale, already-cancelled handle1.
+    act(() => { result.current.stopRecording(); });
+    await waitFor(() => expect(result.current.status).toBe("scoring"));
+    expect(handle2.stop).toHaveBeenCalledTimes(1);
+    expect(handle1.stop).not.toHaveBeenCalled();
   });
 });
 
