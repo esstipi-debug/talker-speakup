@@ -4,9 +4,15 @@ import { MockPron } from "../pron/mock.js";
 import { MAX_AUDIO_BYTES } from "../pron/contract.js";
 
 const assess = vi.fn();
+// A real vi.fn() (not an inline arrow) so individual tests can override what
+// the CONFIGURED provider name is, independently of what a given `assess`
+// call resolves the SERVED report's own pronProvider to — needed to test
+// routes/pron.js's `body.pronProvider ?? currentPronProvider()` precedence
+// (finding 2) without unmocking ../pron/index.js entirely.
+const currentPronProviderMock = vi.fn(() => "mock");
 vi.mock("../pron/index.js", () => ({
   getPron: () => ({ assess: (...args) => assess(...args) }),
-  currentPronProvider: () => "mock",
+  currentPronProvider: () => currentPronProviderMock(),
 }));
 
 import { createApp } from "../app.js";
@@ -16,6 +22,8 @@ beforeEach(() => {
   vi.spyOn(console, "error").mockImplementation(() => {});
   assess.mockReset();
   assess.mockImplementation((buffer, opts) => new MockPron().assess(buffer, opts));
+  currentPronProviderMock.mockReset();
+  currentPronProviderMock.mockReturnValue("mock");
 });
 
 afterEach(() => {
@@ -118,7 +126,12 @@ describe("POST /pron/assess — scripted scoring", () => {
     const [buffer, opts] = assess.mock.calls[0];
     expect(Buffer.isBuffer(buffer)).toBe(true);
     expect(buffer.length).toBe(AUDIO.length);
-    expect(opts).toEqual({ text: TEXT, mode: "scripted", filename: "take-3.ogg" });
+    expect(opts).toEqual({
+      text: TEXT,
+      mode: "scripted",
+      filename: "take-3.ogg",
+      mimeType: "audio/ogg",
+    });
   });
 
   it("400s an audio part with no filename — multer drops files with a falsy name before the handler runs", async () => {
@@ -133,6 +146,68 @@ describe("POST /pron/assess — scripted scoring", () => {
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("MISSING_AUDIO");
     expect(assess).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /pron/assess — pronProvider reflects who actually served the request (finding 2)", () => {
+  it("echoes the provider's own reported pronProvider even when it differs from the configured provider", async () => {
+    // Simulates a BudgetCappedPron that silently fell back to mock once its
+    // spend cap tripped while PRON_PROVIDER is still configured as azure —
+    // the exact scenario design §13.2 relies on being reported honestly.
+    currentPronProviderMock.mockReturnValue("azure");
+    assess.mockResolvedValueOnce({
+      version: 1,
+      mode: "scripted",
+      pronProvider: "mock",
+      model: "mock",
+      overall: { accuracy: 80, fluency: 80, completeness: 100 },
+      prosody: {
+        speechRateWpm: 120,
+        articulationRateSyllPerSec: 4,
+        pauseCount: 0,
+        pauseTotalSec: 0,
+        f0MinHz: null,
+        f0MaxHz: null,
+        f0RangeSemitones: null,
+      },
+      words: [{ word: "sheep", start: 0, end: 1, accuracy: 80 }],
+    });
+
+    const res = await post(createApp())
+      .field("text", TEXT)
+      .attach("audio", AUDIO, { filename: "drill.webm" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.pronProvider).toBe("mock");
+  });
+
+  it("falls back to the configured provider name when the report carries none at all", async () => {
+    currentPronProviderMock.mockReturnValue("local");
+    assess.mockResolvedValueOnce({
+      version: 1,
+      mode: "scripted",
+      // No pronProvider key — e.g. the sidecar, per invariant I7 in its own
+      // spec (the sidecar deliberately omits it; the Node layer supplies it).
+      model: "facebook/wav2vec2-lv-60-espeak-cv-ft",
+      overall: { accuracy: 80, fluency: 80, completeness: 100 },
+      prosody: {
+        speechRateWpm: 120,
+        articulationRateSyllPerSec: 4,
+        pauseCount: 0,
+        pauseTotalSec: 0,
+        f0MinHz: null,
+        f0MaxHz: null,
+        f0RangeSemitones: null,
+      },
+      words: [{ word: "sheep", start: 0, end: 1, accuracy: 80 }],
+    });
+
+    const res = await post(createApp())
+      .field("text", TEXT)
+      .attach("audio", AUDIO, { filename: "drill.webm" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.pronProvider).toBe("local");
   });
 });
 

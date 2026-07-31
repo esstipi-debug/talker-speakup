@@ -81,6 +81,12 @@ router.post("/assess", uploadSingleAudio, async (req, res) => {
       // req.file.originalname is therefore always truthy in practice; this
       // stays as a boundary guard in case that multer behaviour ever changes.
       filename: req.file.originalname || "drill.webm",
+      // The real MIME type of the uploaded bytes (e.g. `audio/webm;
+      // codecs=opus` from the browser's MediaRecorder). AzurePron threads
+      // this into its Content-Type header instead of asserting WAV — see
+      // ../pron/azure.js for why lying about the content type there
+      // guarantees a 4xx from Azure.
+      mimeType: req.file.mimetype,
     });
   } catch (err) {
     console.error("[pron/assess] provider error:", err);
@@ -112,7 +118,13 @@ router.post("/assess", uploadSingleAudio, async (req, res) => {
   // Design §3: without a trustworthy reference text a per-phoneme score is a
   // fabricated number. Strip after validation, for every provider, always.
   const body = mode === "unscripted" ? stripPhones(report) : report;
-  return res.json({ ...body, mode, pronProvider: currentPronProvider() });
+  // Prefer what the provider itself reported (design §13.2): a wrapping
+  // BudgetCappedPron may have silently served its fallback instead of the
+  // configured provider once the spend cap trips, and `currentPronProvider()`
+  // only ever reflects the CONFIGURED provider, not who actually served this
+  // request. Only fall back to the configured-provider string when the
+  // provider genuinely didn't set one (e.g. the sidecar — see contract.js).
+  return res.json({ ...body, mode, pronProvider: body.pronProvider ?? currentPronProvider() });
 });
 
 /**
