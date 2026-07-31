@@ -220,3 +220,133 @@ def substitution_agreement(
         identity_matches=identity_matches,
         identity_accuracy=round(identity_accuracy, 6),
     )
+
+
+#: Only these two verdicts are selectable, best first.
+VERDICT_RANK = {"PASS": 0, "SUBSTITUTIONS_ONLY": 1}
+
+
+@dataclass(frozen=True)
+class ModelVerdict:
+    """The calibration answer for one acoustic model."""
+
+    model: str
+    coverage: float
+    levels: dict[str, Correlation]
+    substitutions: SubstitutionAgreement
+    verdict: str
+    show_numeric_scores: bool
+    reasons: tuple[str, ...]
+
+
+def judge(rows: list[dict[str, str]], model: str) -> ModelVerdict:
+    """Apply the documented thresholds to one model's rows.
+
+    Order matters: coverage first (a model that only scored the easy third of
+    the corpus has a flattering r for the wrong reason), then the two
+    correlation gates, then the design §10 substitutions-only fallback.
+    """
+    model_coverage = round(coverage(rows, model), 6)
+    levels: dict[str, Correlation] = {}
+    for level in sorted(
+        {row["level"] for row in rows if row["model"] == model and row["level"] != "error"}
+    ):
+        human, machine = pairs(rows, model, level)
+        levels[level] = correlate(human, machine)
+    subs = substitution_agreement(rows, model)
+
+    reasons: list[str] = []
+    if model_coverage < PASS_MIN_COVERAGE:
+        reasons.append(
+            f"coverage {model_coverage:.2f} < {PASS_MIN_COVERAGE:.2f} — not enough of the corpus scored"
+        )
+        return ModelVerdict(
+            model=model,
+            coverage=model_coverage,
+            levels=levels,
+            substitutions=subs,
+            verdict="DISQUALIFIED",
+            show_numeric_scores=False,
+            reasons=tuple(reasons),
+        )
+
+    passed = True
+    utterance = levels.get("utterance")
+    if utterance is None or utterance.n < MIN_SAMPLES:
+        passed = False
+        reasons.append(
+            f"utterance samples {0 if utterance is None else utterance.n} < {MIN_SAMPLES}"
+        )
+    elif not utterance.pearson_r >= PASS_MIN_UTTERANCE_PEARSON:
+        passed = False
+        reasons.append(
+            f"utterance pearson r {utterance.pearson_r} < {PASS_MIN_UTTERANCE_PEARSON}"
+        )
+
+    phoneme = levels.get("phoneme")
+    if phoneme is None or phoneme.n < MIN_SAMPLES:
+        passed = False
+        reasons.append(f"phoneme samples {0 if phoneme is None else phoneme.n} < {MIN_SAMPLES}")
+    elif not phoneme.spearman_rho >= PASS_MIN_PHONEME_SPEARMAN:
+        passed = False
+        reasons.append(
+            f"phoneme spearman rho {phoneme.spearman_rho} < {PASS_MIN_PHONEME_SPEARMAN}"
+        )
+
+    if passed:
+        return ModelVerdict(
+            model=model,
+            coverage=model_coverage,
+            levels=levels,
+            substitutions=subs,
+            verdict="PASS",
+            show_numeric_scores=True,
+            reasons=("every threshold met",),
+        )
+
+    if subs.f1 >= FALLBACK_MIN_SUBSTITUTION_F1:
+        reasons.append(
+            f"substitution F1 {subs.f1} >= {FALLBACK_MIN_SUBSTITUTION_F1} — design §10 fallback: "
+            "report substitutions, hide numeric scores"
+        )
+        return ModelVerdict(
+            model=model,
+            coverage=model_coverage,
+            levels=levels,
+            substitutions=subs,
+            verdict="SUBSTITUTIONS_ONLY",
+            show_numeric_scores=False,
+            reasons=tuple(reasons),
+        )
+
+    reasons.append(f"substitution F1 {subs.f1} < {FALLBACK_MIN_SUBSTITUTION_F1}")
+    return ModelVerdict(
+        model=model,
+        coverage=model_coverage,
+        levels=levels,
+        substitutions=subs,
+        verdict="FAIL",
+        show_numeric_scores=False,
+        reasons=tuple(reasons),
+    )
+
+
+def select_model(verdicts: list[ModelVerdict]) -> ModelVerdict | None:
+    """The best selectable model, or None when every candidate is unusable.
+
+    PASS beats SUBSTITUTIONS_ONLY; within a tier the stronger utterance-level
+    Pearson wins; the model label breaks remaining ties so the choice is
+    reproducible.
+    """
+    eligible = [verdict for verdict in verdicts if verdict.verdict in VERDICT_RANK]
+    if not eligible:
+        return None
+
+    def sort_key(verdict: ModelVerdict) -> tuple[int, float, str]:
+        utterance = verdict.levels.get("utterance")
+        r = utterance.pearson_r if utterance is not None else float("nan")
+        if math.isnan(r):
+            r = -2.0
+        return (VERDICT_RANK[verdict.verdict], -r, verdict.model)
+
+    return sorted(eligible, key=sort_key)[0]

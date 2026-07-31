@@ -19,6 +19,9 @@ from correlate import (  # noqa: E402
     models,
     pairs,
     substitution_agreement,
+    ModelVerdict,
+    judge,
+    select_model,
 )
 
 
@@ -172,3 +175,120 @@ def test_substitution_identity_ignores_the_stress_digit():
     rows = [_row(level="phoneme", human_sub="AA1", machine_sub="ɑː", machine_sub_arpabet="AA")]
     result = substitution_agreement(rows, "facebook")
     assert result.identity_matches == 1
+
+
+def _utterance_rows(model, count, *, invert=False):
+    rows = []
+    for index in range(count):
+        human = float(index * 2)
+        machine = float((count - index) * 2) if invert else human
+        rows.append(
+            _row(
+                model=model,
+                level="utterance",
+                utt_id=f"test-{index:05d}",
+                human=str(human),
+                machine=str(machine),
+            )
+        )
+    return rows
+
+
+def _phoneme_rows(model, count, *, invert=False, subs=0):
+    rows = []
+    for index in range(count):
+        human = float(index)
+        machine = float(count - index) if invert else human
+        human_sub = "IY1" if index < subs else ""
+        machine_sub = "iː" if index < subs else ""
+        rows.append(
+            _row(
+                model=model,
+                level="phoneme",
+                utt_id=f"test-{index:05d}",
+                word_index="0",
+                phone_index=str(index),
+                ipa="ɪ",
+                arpabet="IH",
+                human=str(human),
+                machine=str(machine),
+                human_sub=human_sub,
+                machine_sub=machine_sub,
+                machine_sub_arpabet="IY" if machine_sub else "",
+            )
+        )
+    return rows
+
+
+def test_a_well_correlated_model_passes_and_shows_numbers():
+    rows = _utterance_rows("facebook", 40) + _phoneme_rows("facebook", 40)
+    result = judge(rows, "facebook")
+    assert isinstance(result, ModelVerdict)
+    assert result.verdict == "PASS"
+    assert result.show_numeric_scores is True
+    assert result.coverage == pytest.approx(1.0)
+    assert result.levels["utterance"].pearson_r == pytest.approx(1.0)
+
+
+def test_low_coverage_disqualifies_before_correlation_is_considered():
+    rows = _utterance_rows("mrrubino", 10) + [
+        _row(
+            model="mrrubino",
+            level="error",
+            utt_id=f"err-{index:05d}",
+            human="",
+            machine="",
+            error_code="UNPRONOUNCEABLE_TEXT",
+        )
+        for index in range(40)
+    ]
+    result = judge(rows, "mrrubino")
+    assert result.verdict == "DISQUALIFIED"
+    assert result.show_numeric_scores is False
+    assert any("coverage" in reason for reason in result.reasons)
+
+
+def test_weak_correlation_with_usable_substitutions_falls_back_to_substitutions_only():
+    rows = _utterance_rows("facebook", 40, invert=True) + _phoneme_rows(
+        "facebook", 40, invert=True, subs=20
+    )
+    result = judge(rows, "facebook")
+    assert result.verdict == "SUBSTITUTIONS_ONLY"
+    assert result.show_numeric_scores is False
+    assert result.substitutions.f1 == pytest.approx(1.0)
+    assert any("fallback" in reason for reason in result.reasons)
+
+
+def test_weak_correlation_and_weak_substitutions_fails_outright():
+    rows = _utterance_rows("facebook", 40, invert=True) + _phoneme_rows(
+        "facebook", 40, invert=True
+    )
+    result = judge(rows, "facebook")
+    assert result.verdict == "FAIL"
+    assert result.show_numeric_scores is False
+
+
+def test_too_few_samples_never_passes():
+    rows = _utterance_rows("facebook", 5) + _phoneme_rows("facebook", 5)
+    result = judge(rows, "facebook")
+    assert result.verdict != "PASS"
+    assert any("samples" in reason for reason in result.reasons)
+
+
+def test_select_model_prefers_pass_then_the_stronger_correlation():
+    strong = judge(_utterance_rows("a", 40) + _phoneme_rows("a", 40), "a")
+    fallback = judge(
+        _utterance_rows("b", 40, invert=True) + _phoneme_rows("b", 40, invert=True, subs=20),
+        "b",
+    )
+    assert select_model([fallback, strong]).model == "a"
+    assert select_model([fallback]).model == "b"
+    assert select_model([]) is None
+
+
+def test_select_model_returns_none_when_every_candidate_failed():
+    failed = judge(
+        _utterance_rows("a", 40, invert=True) + _phoneme_rows("a", 40, invert=True), "a"
+    )
+    assert failed.verdict == "FAIL"
+    assert select_model([failed]) is None
