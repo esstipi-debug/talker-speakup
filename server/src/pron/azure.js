@@ -46,7 +46,19 @@ import { clampScore, PRON_ERROR_CODES, validateReport } from "./contract.js";
  *     shape used here. The nested shape was kept because it is the one shown
  *     in a full worked example on the page specifically about pronunciation
  *     assessment, but the inconsistency between Microsoft's own pages is real
- *     and unresolved.
+ *     and unresolved. `_toReport` refuses to guess which shape it received —
+ *     see the `NBest[0].PronunciationAssessment` guard below — rather than
+ *     silently mapping the flat shape's absent scores to zero.
+ *   - Content-Type for the request body: the short-audio REST parameter
+ *     tables only show WAV PCM examples (`audio/wav; codecs=audio/pcm;
+ *     samplerate=...`). A real client upload arrives as whatever the
+ *     browser's MediaRecorder produced — typically `audio/webm;
+ *     codecs=opus` — not WAV. This adapter forwards the upload's actual
+ *     MIME type as Content-Type (honest about what the bytes are) rather
+ *     than mislabeling non-WAV audio as WAV PCM, but whether Azure's
+ *     short-audio endpoint accepts anything other than WAV PCM is NOT
+ *     confirmed from documentation alone — verify against a live resource
+ *     before relying on a non-WAV drill against a real Azure key.
  */
 const DEFAULTS = {
   locale: "en-US",
@@ -65,11 +77,25 @@ function seconds(ticks) {
  * Azure reports an ErrorType per word, not the phone it actually heard, and
  * inventing one would fabricate the single most pedagogically load-bearing
  * field in the contract.
+ *
+ * Refuses to map the alternate FLAT Azure response shape (see file header):
+ * without `NBest[0].PronunciationAssessment`, every score would silently
+ * clamp to 0 via `clampScore(undefined)`, shipping the learner a report that
+ * claims they scored zero on everything instead of a clean failure.
  */
 function _toReport(azureJson) {
   const best = azureJson?.NBest?.[0];
-  const assessment = best?.PronunciationAssessment ?? {};
-  const words = (best?.Words ?? []).map((word) => {
+  if (!best?.PronunciationAssessment) {
+    const err = new Error(
+      "Azure response is missing NBest[0].PronunciationAssessment — refusing to map " +
+        "scores from the unconfirmed flat response shape (see file header) rather " +
+        "than fabricating zeros.",
+    );
+    err.code = PRON_ERROR_CODES.BAD_REPORT;
+    throw err;
+  }
+  const assessment = best.PronunciationAssessment;
+  const words = (best.Words ?? []).map((word) => {
     const start = seconds(word.Offset ?? 0);
     const end = seconds((word.Offset ?? 0) + (word.Duration ?? 0));
     const phones = (word.Phonemes ?? []).map((phone) => ({
@@ -93,7 +119,13 @@ function _toReport(azureJson) {
   return {
     version: 1,
     mode: "scripted",
+    pronProvider: "azure",
     model: "azure-pronunciation-assessment",
+    // Required so BudgetCappedPron.recordUsage() has anything to meter at
+    // all (design §13.2) — without this the monthly spend cap can never
+    // engage. Reuses the same last-word-end computation already needed for
+    // speechRateWpm below, rather than probing the audio a second time.
+    durationSec: totalSec,
     overall: {
       accuracy: clampScore(assessment.AccuracyScore),
       fluency: clampScore(assessment.FluencyScore),
@@ -134,11 +166,13 @@ export class AzurePron {
   }
 
   /**
-   * @param {Buffer} audioBuffer 16 kHz mono PCM WAV
-   * @param {{ text: string, mode?: "scripted"|"unscripted", filename?: string }} [opts]
+   * @param {Buffer} audioBuffer WAV is the only content type confirmed against
+   *   Azure's documentation (see file header); pass `mimeType` for anything
+   *   else and it is forwarded honestly as-is, never relabeled as WAV.
+   * @param {{ text: string, mode?: "scripted"|"unscripted", filename?: string, mimeType?: string }} [opts]
    * @returns {Promise<import("./contract.js").PronunciationReport>}
    */
-  async assess(audioBuffer, { text, mode = "scripted", filename = "drill.wav" } = {}) {
+  async assess(audioBuffer, { text, mode = "scripted", filename = "drill.wav", mimeType } = {}) {
     void mode;
     void filename;
     if (!this.apiKey || !this.region) {
@@ -152,6 +186,13 @@ export class AzurePron {
       baseUrl +
       `/speech/recognition/conversation/cognitiveservices/v1?language=${encodeURIComponent(this.locale)}`;
 
+    // Honest, not hardcoded: the upload's real MIME type (threaded through
+    // from the multer upload at the route layer) rather than a fixed WAV
+    // label — see the "Content-Type" bullet in the file header for why
+    // silently declaring non-WAV bytes as WAV would be a lie that
+    // guarantees a 4xx from Azure.
+    const contentType = mimeType || "audio/wav; codecs=audio/pcm; samplerate=16000";
+
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     let json;
@@ -162,7 +203,7 @@ export class AzurePron {
           method: "POST",
           headers: {
             "Ocp-Apim-Subscription-Key": this.apiKey,
-            "Content-Type": "audio/wav; codecs=audio/pcm; samplerate=16000",
+            "Content-Type": contentType,
             Accept: "application/json",
             "Pronunciation-Assessment": this._assessmentHeader(text),
           },
@@ -194,5 +235,22 @@ export class AzurePron {
       throw err;
     }
     return report;
+  }
+
+  /**
+   * Local-only readiness check — deliberately makes no network call. Azure's
+   * short-audio REST API has no cheap health endpoint of its own, and
+   * probing it would mean either spending real money on a synthetic
+   * assessment or maintaining a second, unmetered call path; neither is
+   * worth it just so `BudgetCappedPron.health()` (which delegates to
+   * whatever `this.metered` is) has something to call.
+   *
+   * @returns {Promise<{ status: "ok"|"unconfigured", model: string }>}
+   */
+  async health() {
+    return {
+      status: this.apiKey && this.region ? "ok" : "unconfigured",
+      model: "azure-pronunciation-assessment",
+    };
   }
 }

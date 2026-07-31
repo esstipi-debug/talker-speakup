@@ -165,4 +165,74 @@ describe("azure — assess", () => {
     expect(error.code).toBe("PRON_UNAVAILABLE");
     expect(error.message).toBe("fetch failed");
   });
+
+  it("stamps its own pronProvider so a wrapping BudgetCappedPron can report honestly even after a fallback swap elsewhere", async () => {
+    fetch.mockResolvedValue(response(AZURE_BODY));
+    const report = await new AzurePron().assess(AUDIO, { text: "sheep" });
+    expect(report.pronProvider).toBe("azure");
+  });
+
+  it("includes durationSec on the report, derived from the last word's end time — required for BudgetCappedPron.recordUsage() to ever fire (finding 1)", async () => {
+    fetch.mockResolvedValue(response(AZURE_BODY));
+    const report = await new AzurePron().assess(AUDIO, { text: "sheep" });
+    expect(typeof report.durationSec).toBe("number");
+    expect(report.durationSec).toBeGreaterThanOrEqual(0);
+    // AZURE_BODY's sole word ("sheep") ends at 0.42 + 0.39 = 0.81 s.
+    expect(report.durationSec).toBe(0.81);
+  });
+
+  it("throws BAD_REPORT instead of a zero-filled report when the response uses the alternate flat shape (no PronunciationAssessment wrapper)", async () => {
+    const flatBody = {
+      RecognitionStatus: "Success",
+      DisplayText: "Sheep.",
+      NBest: [
+        {
+          Lexical: "sheep",
+          // No `PronunciationAssessment` key at all — Microsoft's own docs
+          // show this alternate flat shape on the same page (see the file
+          // header comment). Mapping this naively would clampScore(undefined)
+          // every score to 0 and ship a fabricated "you scored zero" report.
+          Words: [{ Word: "sheep", Offset: 0, Duration: 3900000 }],
+        },
+      ],
+    };
+    fetch.mockResolvedValue(response(flatBody));
+    const error = await new AzurePron().assess(AUDIO, { text: "sheep" }).catch((err) => err);
+    expect(error.code).toBe("BAD_REPORT");
+    expect(error.message).toContain("PronunciationAssessment");
+    expect(error.message).not.toContain("must be an integer 0-100");
+  });
+
+  it("derives the Content-Type header from the upload's actual MIME type instead of asserting WAV", async () => {
+    fetch.mockResolvedValue(response(AZURE_BODY));
+    await new AzurePron().assess(AUDIO, { text: "sheep", mimeType: "audio/webm;codecs=opus" });
+    const [, init] = fetch.mock.calls[0];
+    expect(init.headers["Content-Type"]).toBe("audio/webm;codecs=opus");
+  });
+
+  it("falls back to the documented WAV content type when the caller supplies no mimeType", async () => {
+    fetch.mockResolvedValue(response(AZURE_BODY));
+    await new AzurePron().assess(AUDIO, { text: "sheep" });
+    const [, init] = fetch.mock.calls[0];
+    expect(init.headers["Content-Type"]).toBe("audio/wav; codecs=audio/pcm; samplerate=16000");
+  });
+});
+
+describe("azure — health", () => {
+  it("resolves ok without making any network call once key and region are configured", async () => {
+    process.env.AZURE_SPEECH_KEY = "secret-key";
+    process.env.AZURE_SPEECH_REGION = "westeurope";
+    await expect(new AzurePron().health()).resolves.toEqual({
+      status: "ok",
+      model: "azure-pronunciation-assessment",
+    });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("resolves (never throws) reporting unconfigured when key/region are missing — BudgetCappedPron.health() must never crash", async () => {
+    await expect(new AzurePron().health()).resolves.toEqual({
+      status: "unconfigured",
+      model: "azure-pronunciation-assessment",
+    });
+  });
 });
