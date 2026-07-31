@@ -101,6 +101,7 @@ export class MockPron {
     return {
       version: 1,
       mode,
+      pronProvider: "mock",
       model: "mock",
       overall: {
         accuracy: clampScore(totalPhones ? weighted / totalPhones : 0),
@@ -118,5 +119,17 @@ export class MockPron {
       },
       words: reportWords,
     };
+  }
+
+  /**
+   * Always ready — there is nothing to be unavailable. Exists so every
+   * provider in the pron/ slot shares the same interface (BudgetCappedPron
+   * and any future caller can call `.health()` on whichever provider it
+   * holds without knowing which one it is).
+   *
+   * @returns {Promise<{ status: "ok", model: "mock" }>}
+   */
+  async health() {
+    return { status: "ok", model: "mock" };
   }
 }

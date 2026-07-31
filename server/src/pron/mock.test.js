@@ -145,4 +145,15 @@ describe("mock — MockPron.assess", () => {
     expect(a.words[0].word).toBe("(blank)");
     expect(a.words[0].word.trim()).not.toBe("");
   });
+
+  it("stamps its own pronProvider so a wrapping BudgetCappedPron fallback reports honestly, not whatever the configured provider was (finding 2)", async () => {
+    const report = await new MockPron().assess(AUDIO, { text: TEXT });
+    expect(report.pronProvider).toBe("mock");
+  });
+});
+
+describe("mock — health", () => {
+  it("resolves without throwing, matching the interface BudgetCappedPron.health() expects of whichever provider it holds", async () => {
+    await expect(new MockPron().health()).resolves.toEqual({ status: "ok", model: "mock" });
+  });
 });
