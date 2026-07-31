@@ -229,3 +229,133 @@ describe("usePronunciationDrill — scoring round trip", () => {
     expect(result.current.report).toBeNull(); // retry clears the previous score
   });
 });
+
+/** Drive one full take and stop awaiting at `until`. */
+async function take(result, until) {
+  act(() => { result.current.startRecording(); });
+  await waitFor(() => expect(result.current.status).toBe("recording"));
+  act(() => { result.current.stopRecording(); });
+  await waitFor(() => expect(result.current.status).toBe(until));
+}
+
+describe("usePronunciationDrill — degradation", () => {
+  it("falls back to listen-and-repeat when the scorer is offline", async () => {
+    const { result } = await mounted();
+    postPronAssess.mockRejectedValueOnce(
+      Object.assign(new Error("Pronunciation scoring is offline."), { code: "PRON_UNAVAILABLE" }),
+    );
+
+    await take(result, "unavailable");
+
+    expect(result.current.scoringUnavailable).toBe(true);
+    expect(result.current.error).toBe(
+      "Scoring is offline. Listen and repeat — no score this round.",
+    );
+    expect(result.current.report).toBeNull();
+    expect(result.current.errors).toEqual([]);
+    expect(result.current.attempts).toBe(0); // an unscored take is not an attempt
+  });
+
+  it("lets the learner retry straight back into the same prompt after going offline", async () => {
+    const { result } = await mounted();
+    postPronAssess.mockRejectedValueOnce(
+      Object.assign(new Error("offline"), { code: "PRON_UNAVAILABLE" }),
+    );
+    await take(result, "unavailable");
+
+    act(() => result.current.retry());
+    await waitFor(() => expect(result.current.status).toBe("prompt"));
+    expect(result.current.prompt.id).toBe("ih-iy-01");
+    // The offline flag is sticky for the session so the UI keeps the notice.
+    expect(result.current.scoringUnavailable).toBe(true);
+  });
+
+  it("recovers to a real score once the sidecar answers again", async () => {
+    const { result } = await mounted();
+    postPronAssess.mockRejectedValueOnce(
+      Object.assign(new Error("offline"), { code: "PRON_UNAVAILABLE" }),
+    );
+    await take(result, "unavailable");
+    act(() => result.current.retry());
+    await waitFor(() => expect(result.current.status).toBe("prompt"));
+
+    await take(result, "result");
+    expect(result.current.report.overall.accuracy).toBe(62);
+    expect(result.current.attempts).toBe(1);
+  });
+
+  it("keeps a non-fatal scoring error on the prompt screen", async () => {
+    const { result } = await mounted();
+    postPronAssess.mockRejectedValueOnce(
+      Object.assign(new Error("Couldn't make out any speech in that recording."), {
+        code: "NO_SPEECH",
+      }),
+    );
+
+    await take(result, "prompt");
+
+    expect(result.current.error).toBe("Couldn't make out any speech in that recording.");
+    expect(result.current.scoringUnavailable).toBe(false);
+    act(() => result.current.clearError());
+    expect(result.current.error).toBeNull();
+  });
+
+  it("treats a hung scorer as offline once the client guard fires", async () => {
+    const { result } = await mounted();
+    postPronAssess.mockImplementationOnce(() => new Promise(() => {})); // never settles
+
+    // Timer *spy*, not fake timers: mounted() already used a real-timer waitFor,
+    // and this is the repo's idiom for firing a deferred callback by hand.
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      act(() => { result.current.startRecording(); });
+      await waitFor(() => expect(result.current.status).toBe("recording"));
+      act(() => { result.current.stopRecording(); });
+      await waitFor(() => expect(result.current.status).toBe("scoring"));
+
+      const armed = setTimeoutSpy.mock.calls.find(([, delay]) => delay === 35000);
+      expect(armed).toBeDefined();
+      act(() => armed[0]());
+
+      await waitFor(() => expect(result.current.status).toBe("unavailable"));
+      expect(result.current.scoringUnavailable).toBe(true);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it("reports a refused microphone and returns to the prompt", async () => {
+    const { result } = await mounted();
+    nextHandleNull = true;
+    act(() => { result.current.startRecording(); });
+    // startRecording resolved null -> the machine bounces back without recording.
+    await waitFor(() => expect(result.current.status).toBe("prompt"));
+    act(() => lastStartOpts.onError("NotAllowedError"));
+    expect(result.current.error).toBe("Microphone access was refused. Allow it, then try again.");
+  });
+
+  it("surfaces any other recorder error verbatim", async () => {
+    const { result } = await mounted();
+    act(() => { result.current.startRecording(); });
+    await waitFor(() => expect(result.current.status).toBe("recording"));
+    act(() => lastStartOpts.onError("empty-recording"));
+    expect(result.current.error).toBe("Recording failed (empty-recording).");
+  });
+
+  it("returns to the prompt when the recorder hands back no take", async () => {
+    const { result } = await mounted();
+    takeResult = null;
+    await take(result, "prompt");
+    expect(postPronAssess).not.toHaveBeenCalled();
+  });
+
+  it("rejects a mis-tap shorter than the minimum take", async () => {
+    const { result } = await mounted();
+    takeResult = { blob: new Blob(["t"]), durationMs: 120 };
+    await take(result, "prompt");
+    expect(result.current.error).toBe(
+      "That take was too short — read the whole sentence out loud.",
+    );
+    expect(postPronAssess).not.toHaveBeenCalled();
+  });
+});
