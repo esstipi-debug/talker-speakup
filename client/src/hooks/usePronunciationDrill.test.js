@@ -472,4 +472,46 @@ describe("usePronunciationDrill — races", () => {
     await waitFor(() => expect(result.current.status).toBe("result"));
     expect(lastHandle.stop).toHaveBeenCalledTimes(1);
   });
+
+  it("does not orphan a newly-adopted recorder when a stale stopRecording resolves late", async () => {
+    const { result } = await mounted();
+
+    act(() => { result.current.startRecording(); });
+    await waitFor(() => expect(result.current.status).toBe("recording"));
+    const handle1 = lastHandle; // H1
+
+    let settleStop1;
+    handle1.stop.mockImplementationOnce(
+      () => new Promise((resolve) => { settleStop1 = resolve; }),
+    );
+
+    act(() => { result.current.stopRecording(); });
+    await waitFor(() => expect(result.current.status).toBe("scoring"));
+
+    // Interrupt scoring via the guard-free navigation path: bumps attemptSeq
+    // and returns to "prompt" while H1.stop() is still parked, unresolved.
+    act(() => result.current.selectPrompt("v-b-01"));
+    await waitFor(() => expect(result.current.prompt.id).toBe("v-b-01"));
+
+    act(() => { result.current.startRecording(); });
+    await waitFor(() => expect(result.current.status).toBe("recording"));
+    const handle2 = lastHandle; // H2 -- makeHandle() reassigned lastHandle here
+    expect(handle2).not.toBe(handle1);
+
+    // The stale stopRecording continuation for the abandoned H1 take now
+    // resolves. It must not touch recorderRef, which already points at the
+    // live H2 adopted by the second startRecording() call above.
+    await act(async () => {
+      settleStop1(null);
+    });
+
+    expect(result.current.status).toBe("recording"); // unaffected by the stale continuation
+
+    // H2 must still be the live, controllable handle rather than orphaned:
+    // if recorderRef.current had been wiped, cancelRecording()'s optional
+    // chaining would silently no-op instead of calling H2.cancel().
+    act(() => result.current.cancelRecording());
+    expect(handle2.cancel).toHaveBeenCalledTimes(1);
+    expect(result.current.status).toBe("prompt");
+  });
 });

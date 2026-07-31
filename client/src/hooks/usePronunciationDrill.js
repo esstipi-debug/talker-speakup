@@ -178,7 +178,11 @@ export function usePronunciationDrill({ focus = null } = {}) {
     updateStatus("scoring"); // also the re-entrancy guard against a double tap
 
     const take = await handle.stop();
-    recorderRef.current = null;
+    // Only release the handle this call adopted. A stale stopRecording
+    // continuation (e.g. after a prompt switch interrupted "scoring" and a
+    // fresh recording was started before this await resolved) must not wipe
+    // out the NEW live handle a later call already put in recorderRef.
+    if (recorderRef.current === handle) recorderRef.current = null;
     if (!mountedRef.current || attemptSeqRef.current !== seq) return;
     if (!take) {
       updateStatus("prompt"); // the recorder already reported why via onError
@@ -213,12 +217,14 @@ export function usePronunciationDrill({ focus = null } = {}) {
 
   function nextPrompt() {
     if (statusRef.current === "recording") return;
+    const list = promptsRef.current;
+    if (list.length === 0) return;
     // Switching prompts mid-scoring abandons the in-flight attempt rather than
     // blocking on it: bump the sequence so scoreTake's stale-response guard
     // discards whatever answer eventually arrives for the abandoned take.
+    // This only runs once the navigation is known to actually proceed, so an
+    // invalid target never leaves attemptSeqRef bumped with status stuck.
     if (statusRef.current === "scoring") attemptSeqRef.current += 1;
-    const list = promptsRef.current;
-    if (list.length === 0) return;
     setPromptIndex((i) => (i + 1) % list.length);
     setReport(null);
     setError(null);
@@ -227,11 +233,12 @@ export function usePronunciationDrill({ focus = null } = {}) {
 
   function selectPrompt(id) {
     if (statusRef.current === "recording") return;
-    // Same invalidation as nextPrompt: `scoring` is a passive async wait, so
-    // switching prompts here is allowed and must invalidate the stale attempt.
-    if (statusRef.current === "scoring") attemptSeqRef.current += 1;
     const index = promptsRef.current.findIndex((p) => p.id === id);
     if (index === -1) return;
+    // Same invalidation as nextPrompt, applied only once the id is known to
+    // resolve to a real prompt: `scoring` is a passive async wait, so
+    // switching prompts here is allowed and must invalidate the stale attempt.
+    if (statusRef.current === "scoring") attemptSeqRef.current += 1;
     setPromptIndex(index);
     setReport(null);
     setError(null);
