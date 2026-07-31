@@ -432,6 +432,78 @@ describe("contract — validateReport", () => {
     report.words[0].phones[0].end = report.words[0].phones[0].start;
     expect(validateReport(report)).toEqual({ ok: true });
   });
+
+  it("rejects a report with a missing or invalid mode", () => {
+    const a = validReport();
+    delete a.mode;
+    expect(validateReport(a).error).toBe("report.mode must be one of scripted, unscripted.");
+
+    const b = validReport();
+    b.mode = "freestyle";
+    expect(validateReport(b).error).toBe("report.mode must be one of scripted, unscripted.");
+  });
+
+  it("rejects a report with a missing or empty model", () => {
+    const a = validReport();
+    delete a.model;
+    expect(validateReport(a).error).toBe("report.model must be a non-empty string.");
+
+    const b = validReport();
+    b.model = "";
+    expect(validateReport(b).error).toBe("report.model must be a non-empty string.");
+
+    const c = validReport();
+    c.model = 7;
+    expect(validateReport(c).error).toBe("report.model must be a non-empty string.");
+  });
+
+  it("validates pronProvider only when present, against the documented enum", () => {
+    const a = validReport();
+    a.pronProvider = "elevenlabs";
+    expect(validateReport(a).error).toBe("report.pronProvider must be one of local, mock, azure.");
+
+    const b = validReport();
+    b.pronProvider = "azure";
+    expect(validateReport(b)).toEqual({ ok: true });
+
+    const c = validReport();
+    expect("pronProvider" in c).toBe(false);
+    expect(validateReport(c)).toEqual({ ok: true });
+  });
+
+  it("validates durationSec only when present, rejecting negatives and non-numbers", () => {
+    const a = validReport();
+    a.durationSec = -1;
+    expect(validateReport(a).error).toBe("report.durationSec must be a number >= 0.");
+
+    const b = validReport();
+    b.durationSec = "4.2";
+    expect(validateReport(b).error).toBe("report.durationSec must be a number >= 0.");
+
+    const c = validReport();
+    c.durationSec = 4.2;
+    expect(validateReport(c)).toEqual({ ok: true });
+
+    const d = validReport();
+    d.durationSec = 0;
+    expect(validateReport(d)).toEqual({ ok: true });
+  });
+
+  it("validates sampleRate only when present, rejecting anything but 16000", () => {
+    const a = validReport();
+    a.sampleRate = 44100;
+    expect(validateReport(a).error).toBe("report.sampleRate must be 16000.");
+
+    const b = validReport();
+    b.sampleRate = 16000;
+    expect(validateReport(b)).toEqual({ ok: true });
+  });
+
+  it("rejects an unexpected top-level key even when everything else validates — e.g. a rogue provider smuggling phone-shaped data outside words[].phones", () => {
+    const a = validReport();
+    a.phoneDetail = [{ gop: 0.9 }];
+    expect(validateReport(a).error).toBe('report has unknown key "phoneDetail".');
+  });
 });
 
 describe("contract — stripPhones", () => {

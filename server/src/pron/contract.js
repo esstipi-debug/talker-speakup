@@ -136,6 +136,7 @@
  */
 
 export const PRON_MODES = Object.freeze(["scripted", "unscripted"]);
+export const PRON_PROVIDERS = Object.freeze(["local", "mock", "azure"]);
 export const DEFAULT_MODE = "scripted";
 export const MAX_TEXT_LENGTH = 300;
 export const MAX_AUDIO_BYTES = 15 * 1024 * 1024;
@@ -227,6 +228,17 @@ export function validateAssessInput({ text, mode, audioBytes } = {}) {
   return { ok: true, value: { text: trimmed, mode: mode ?? DEFAULT_MODE } };
 }
 
+const TOP_LEVEL_KEYS = [
+  "version",
+  "mode",
+  "pronProvider",
+  "model",
+  "durationSec",
+  "sampleRate",
+  "overall",
+  "prosody",
+  "words",
+];
 const OVERALL_KEYS = ["accuracy", "fluency", "completeness"];
 const PROSODY_NUMBER_KEYS = ["speechRateWpm", "articulationRateSyllPerSec", "pauseTotalSec"];
 const PROSODY_NULLABLE_KEYS = ["f0MinHz", "f0MaxHz", "f0RangeSemitones"];
@@ -253,8 +265,11 @@ function unknownKey(object, allowed, path) {
 
 /**
  * Structural gate on anything a provider hands back. Everything the JSON Schema
- * in this file's header states, plus the three invariants a schema cannot say:
- * `substituted` absent-not-null, `substituted !== ipa`, and no unknown keys.
+ * in this file's header states — including the envelope fields (`mode`,
+ * `model`, the `pronProvider` enum, `durationSec >= 0`, `sampleRate === 16000`,
+ * and top-level `additionalProperties: false`) — plus the three invariants a
+ * schema cannot say: `substituted` absent-not-null, `substituted !== ipa`, and
+ * no unknown keys anywhere else in the tree.
  *
  * @param {unknown} report
  * @returns {{ ok: true } | { ok: false, error: string }}
@@ -340,6 +355,27 @@ export function validateReport(report) {
       if (phoneExtra) return fail(phoneExtra);
     }
   }
+
+  // Envelope-level fields, checked last so a structural failure inside
+  // overall/prosody/words keeps surfacing its own specific error message
+  // first (several callers pin those exact messages).
+  if (!PRON_MODES.includes(report.mode)) {
+    return fail(`report.mode must be one of ${PRON_MODES.join(", ")}.`);
+  }
+  if (typeof report.model !== "string" || !report.model) {
+    return fail("report.model must be a non-empty string.");
+  }
+  if (report.pronProvider !== undefined && !PRON_PROVIDERS.includes(report.pronProvider)) {
+    return fail(`report.pronProvider must be one of ${PRON_PROVIDERS.join(", ")}.`);
+  }
+  if (report.durationSec !== undefined && !isNonNegativeNumber(report.durationSec)) {
+    return fail("report.durationSec must be a number >= 0.");
+  }
+  if (report.sampleRate !== undefined && report.sampleRate !== 16000) {
+    return fail("report.sampleRate must be 16000.");
+  }
+  const topExtra = unknownKey(report, TOP_LEVEL_KEYS, "report");
+  if (topExtra) return fail(topExtra);
 
   return { ok: true };
 }
