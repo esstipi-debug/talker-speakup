@@ -24,7 +24,7 @@ export default function DrillPanel({ focus = null }) {
     );
   }
 
-  const showResult = d.status === "result" || d.scoringUnavailable;
+  const showResult = d.status === "result" || d.status === "unavailable";
 
   return (
     <div className="px-5 py-6 space-y-4">

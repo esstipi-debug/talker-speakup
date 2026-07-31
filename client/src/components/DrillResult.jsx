@@ -6,22 +6,23 @@ import PhonemeScore from "./PhonemeScore.jsx";
  * re-slices it.
  */
 export default function DrillResult({ report, errors, scoringUnavailable, onRetry, onNext }) {
-  if (scoringUnavailable) {
-    return (
-      <div className="space-y-4">
-        <p
-          role="status"
-          className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-300"
-        >
-          Scoring is offline — this round is listen-and-repeat. Say the sentence back, then keep
-          going. No score this time.
-        </p>
-        <Actions onRetry={onRetry} onNext={onNext} />
-      </div>
-    );
+  if (!report) {
+    if (scoringUnavailable) {
+      return (
+        <div className="space-y-4">
+          <p
+            role="status"
+            className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-300"
+          >
+            Scoring is offline — this round is listen-and-repeat. Say the sentence back, then keep
+            going. No score this time.
+          </p>
+          <Actions onRetry={onRetry} onNext={onNext} />
+        </div>
+      );
+    }
+    return null;
   }
-
-  if (!report) return null;
 
   return (
     <div className="space-y-4">

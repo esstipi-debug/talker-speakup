@@ -84,8 +84,16 @@ describe("DrillResult — scored", () => {
 });
 
 describe("DrillResult — scoring unavailable", () => {
-  it("shows the listen-and-repeat notice and no scores, even with a stale report", () => {
-    setup({ scoringUnavailable: true });
+  it("shows the listen-and-repeat notice and no scores when there is no report", () => {
+    render(
+      <DrillResult
+        report={null}
+        errors={[]}
+        scoringUnavailable={true}
+        onRetry={vi.fn()}
+        onNext={vi.fn()}
+      />,
+    );
     expect(screen.getByRole("status")).toHaveTextContent(/listen-and-repeat/i);
     expect(screen.queryByText("Accuracy")).toBeNull();
     expect(screen.queryByTestId("phoneme-score")).toBeNull();
@@ -93,11 +101,20 @@ describe("DrillResult — scoring unavailable", () => {
   });
 
   it("still offers retry and next so the drill keeps moving", async () => {
-    const h = setup({ scoringUnavailable: true });
+    const h = setup({ report: null, errors: [], scoringUnavailable: true });
     await userEvent.click(screen.getByRole("button", { name: "Try again" }));
     await userEvent.click(screen.getByRole("button", { name: "Next sentence" }));
     expect(h.onRetry).toHaveBeenCalledTimes(1);
     expect(h.onNext).toHaveBeenCalledTimes(1);
+  });
+
+  it("prefers a real report over the sticky flag once scoring has recovered", () => {
+    // scoringUnavailable can still be true (it is session-sticky on the hook)
+    // even after a later take produced a genuine report; the report must win.
+    setup({ scoringUnavailable: true });
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByText("Accuracy").nextSibling).toHaveTextContent("62");
+    expect(screen.getByTestId("phoneme-score")).toBeInTheDocument();
   });
 });
 
