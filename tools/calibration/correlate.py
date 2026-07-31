@@ -23,6 +23,8 @@ from pathlib import Path
 
 from scipy import stats
 
+from arpabet_ipa import strip_stress
+
 #: A model that cannot score this fraction of the corpus is disqualified before
 #: correlation is even considered — a model that only scores the easy 40 % has a
 #: flattering r for reasons that have nothing to do with quality.
@@ -149,3 +151,72 @@ def pairs(
         human.append(float(row["human"]))
         machine.append(float(row["machine"]))
     return human, machine
+
+
+@dataclass(frozen=True)
+class SubstitutionAgreement:
+    """How well the machine's `substituted` field tracks the human labels.
+
+    `f1` measures *detection* (did the machine flag the same phones the raters
+    flagged). `identity_accuracy` measures whether, having flagged one, it named
+    the right replacement — the part a learner actually reads.
+    """
+
+    true_positives: int
+    false_positives: int
+    false_negatives: int
+    precision: float
+    recall: float
+    f1: float
+    identity_matches: int
+    identity_accuracy: float
+
+
+def substitution_agreement(
+    rows: list[dict[str, str]],
+    model: str,
+) -> SubstitutionAgreement:
+    """Detection precision/recall/F1 plus identity accuracy over phoneme rows."""
+    true_positives = 0
+    false_positives = 0
+    false_negatives = 0
+    identity_matches = 0
+    for row in rows:
+        if row["model"] != model or row["level"] != "phoneme":
+            continue
+        human = row["human_sub"].strip()
+        machine = row["machine_sub"].strip()
+        if human and machine:
+            true_positives += 1
+            predicted = [
+                phone for phone in row["machine_sub_arpabet"].split("+") if phone
+            ]
+            if strip_stress(human) in predicted:
+                identity_matches += 1
+        elif machine:
+            false_positives += 1
+        elif human:
+            false_negatives += 1
+
+    precision = (
+        true_positives / (true_positives + false_positives)
+        if true_positives + false_positives
+        else 0.0
+    )
+    recall = (
+        true_positives / (true_positives + false_negatives)
+        if true_positives + false_negatives
+        else 0.0
+    )
+    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    identity_accuracy = identity_matches / true_positives if true_positives else 0.0
+    return SubstitutionAgreement(
+        true_positives=true_positives,
+        false_positives=false_positives,
+        false_negatives=false_negatives,
+        precision=round(precision, 6),
+        recall=round(recall, 6),
+        f1=round(f1, 6),
+        identity_matches=identity_matches,
+        identity_accuracy=round(identity_accuracy, 6),
+    )

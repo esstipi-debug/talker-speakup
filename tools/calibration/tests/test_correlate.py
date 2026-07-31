@@ -13,10 +13,12 @@ from correlate import Correlation, correlate  # noqa: E402
 
 from correlate import (  # noqa: E402
     REQUIRED_COLUMNS,
+    SubstitutionAgreement,
     coverage,
     load_rows,
     models,
     pairs,
+    substitution_agreement,
 )
 
 
@@ -131,3 +133,42 @@ def test_pairs_selects_one_level_of_one_model_and_skips_blanks():
     ]
     assert pairs(rows, "facebook", "utterance") == ([80.0], [70.0])
     assert pairs(rows, "facebook", "phoneme") == ([100.0], [90.0])
+
+
+def test_substitution_agreement_counts_detection_and_identity():
+    rows = [
+        # true positive, right identity: human heard IY where IH was expected
+        _row(level="phoneme", human_sub="IY1", machine_sub="iː", machine_sub_arpabet="IY"),
+        # true positive, wrong identity
+        _row(level="phoneme", human_sub="EH0", machine_sub="æ", machine_sub_arpabet="AE"),
+        # false positive: the machine invented a substitution
+        _row(level="phoneme", human_sub="", machine_sub="b", machine_sub_arpabet="B"),
+        # false negative: the machine missed one
+        _row(level="phoneme", human_sub="D", machine_sub="", machine_sub_arpabet=""),
+        # agreed-correct phone, counts toward neither
+        _row(level="phoneme"),
+        # utterance rows are ignored entirely
+        _row(level="utterance", human_sub="D"),
+    ]
+    result = substitution_agreement(rows, "facebook")
+    assert isinstance(result, SubstitutionAgreement)
+    assert (result.true_positives, result.false_positives, result.false_negatives) == (2, 1, 1)
+    assert result.precision == pytest.approx(2 / 3)
+    assert result.recall == pytest.approx(2 / 3)
+    assert result.f1 == pytest.approx(2 / 3)
+    assert result.identity_matches == 1
+    assert result.identity_accuracy == pytest.approx(0.5)
+
+
+def test_substitution_agreement_is_all_zero_when_nothing_was_flagged():
+    result = substitution_agreement([_row(level="phoneme")], "facebook")
+    assert result.f1 == 0.0
+    assert result.precision == 0.0
+    assert result.recall == 0.0
+    assert result.identity_accuracy == 0.0
+
+
+def test_substitution_identity_ignores_the_stress_digit():
+    rows = [_row(level="phoneme", human_sub="AA1", machine_sub="ɑː", machine_sub_arpabet="AA")]
+    result = substitution_agreement(rows, "facebook")
+    assert result.identity_matches == 1
