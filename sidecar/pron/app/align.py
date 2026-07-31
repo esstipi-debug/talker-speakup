@@ -58,3 +58,67 @@ def expand_spans(spans, total_frames: int) -> list[tuple[int, int]]:
     ends[count - 1] = total_frames
 
     return [(starts[i], ends[i]) for i in range(count)]
+
+
+def align_sequence(log_probs, token_ids: list[int], blank: int):
+    """Run CTC forced alignment on the phoneme model's own log-probs.
+
+    No second model: torchaudio's MMS_FA bundle is character-level and CC-BY-NC,
+    so it cannot produce per-phoneme spans and must not be used here.
+    """
+    import torch
+    import torchaudio.functional as AF
+
+    from .errors import PronError
+
+    if not token_ids:
+        raise PronError(
+            "UNPRONOUNCEABLE_TEXT",
+            "Couldn't turn that sentence into phonemes. Try plain English words.",
+            status=400,
+        )
+
+    if int(log_probs.shape[1]) < len(token_ids):
+        raise PronError(
+            "NO_SPEECH",
+            "Couldn't make out any speech in that recording.",
+            status=422,
+        )
+
+    targets = torch.tensor([list(token_ids)], dtype=torch.int32, device=log_probs.device)
+
+    try:
+        alignments, scores = AF.forced_align(log_probs, targets, blank=int(blank))
+        spans = AF.merge_tokens(alignments[0], scores[0].exp(), blank=int(blank))
+    except RuntimeError as exc:
+        if "too long" in str(exc).lower():
+            raise PronError(
+                "NO_SPEECH", "Couldn't make out any speech in that recording.", status=422
+            ) from exc
+        raise PronError("INTERNAL", "Alignment failed for that recording.", status=500) from exc
+    except ValueError as exc:
+        raise PronError("INTERNAL", "Alignment failed for that recording.", status=500) from exc
+
+    if len(spans) != len(token_ids):
+        raise PronError("INTERNAL", "Alignment failed for that recording.", status=500)
+
+    return spans
+
+
+def to_phone_spans(spans, ipa_tokens: list[str], total_frames: int) -> list[PhoneSpan]:
+    if len(spans) != len(ipa_tokens):
+        raise ValueError(f"to_phone_spans: {len(spans)} spans but {len(ipa_tokens)} IPA tokens")
+
+    expanded = expand_spans(spans, total_frames)
+    return [
+        PhoneSpan(
+            token_id=int(span.token),
+            ipa=ipa,
+            raw_start=int(span.start),
+            raw_end=int(span.end),
+            start=int(start),
+            end=int(end),
+            ctc_score=float(span.score),
+        )
+        for span, ipa, (start, end) in zip(spans, ipa_tokens, expanded)
+    ]

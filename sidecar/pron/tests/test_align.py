@@ -68,3 +68,58 @@ def test_phone_span_is_frozen_and_carries_both_raw_and_expanded_frames():
     assert (span.start, span.end) == (6, 15)
     with pytest.raises(Exception):
         span.start = 0  # type: ignore[misc]
+
+
+import torch
+
+from app.align import align_sequence, to_phone_spans
+from app.errors import PronError
+
+
+def _peaky_log_probs(frames: int, classes: int, path: list[int]) -> torch.Tensor:
+    logits = torch.full((1, frames, classes), -10.0)
+    for frame, token in enumerate(path):
+        logits[0, frame, token] = 10.0
+    return torch.log_softmax(logits, dim=-1)
+
+
+def test_align_sequence_returns_one_span_per_target_token():
+    log_probs = _peaky_log_probs(6, 5, [0, 1, 0, 2, 0, 0])
+    spans = align_sequence(log_probs, [1, 2], blank=0)
+    assert [span.token for span in spans] == [1, 2]
+    assert (spans[0].start, spans[0].end) == (1, 2)
+    assert (spans[1].start, spans[1].end) == (3, 4)
+    assert 0.0 < spans[0].score <= 1.0  # already exp()'d to a probability
+
+
+def test_align_sequence_raises_no_speech_when_the_audio_is_shorter_than_the_transcript():
+    log_probs = _peaky_log_probs(2, 5, [0, 0])
+    with pytest.raises(PronError) as excinfo:
+        align_sequence(log_probs, [1, 2, 3, 4], blank=0)
+    assert excinfo.value.code == "NO_SPEECH"
+    assert excinfo.value.status == 422
+
+
+def test_align_sequence_rejects_an_empty_target():
+    with pytest.raises(PronError) as excinfo:
+        align_sequence(_peaky_log_probs(4, 5, [0, 0, 0, 0]), [], blank=0)
+    assert excinfo.value.code == "UNPRONOUNCEABLE_TEXT"
+
+
+def test_to_phone_spans_keeps_raw_frames_and_adds_expanded_contiguous_ones():
+    log_probs = _peaky_log_probs(6, 5, [0, 1, 0, 2, 0, 0])
+    spans = align_sequence(log_probs, [1, 2], blank=0)
+
+    phones = to_phone_spans(spans, ["ʃ", "p"], total_frames=6)
+
+    assert [p.ipa for p in phones] == ["ʃ", "p"]
+    assert [(p.raw_start, p.raw_end) for p in phones] == [(1, 2), (3, 4)]
+    assert [(p.start, p.end) for p in phones] == [(0, 2), (2, 6)]
+    assert [p.token_id for p in phones] == [1, 2]
+
+
+def test_to_phone_spans_refuses_a_token_count_mismatch():
+    log_probs = _peaky_log_probs(6, 5, [0, 1, 0, 2, 0, 0])
+    spans = align_sequence(log_probs, [1, 2], blank=0)
+    with pytest.raises(ValueError):
+        to_phone_spans(spans, ["ʃ"], total_frames=6)
