@@ -82,3 +82,60 @@ describe("rankPronErrors — intelligibility impact", () => {
     expect(errors.map((e) => e.score)).toEqual([1, 2, 3]);
   });
 });
+
+describe("rankPronErrors — degenerate input", () => {
+  it("returns [] for a null or empty report", () => {
+    expect(rankPronErrors(null)).toEqual([]);
+    expect(rankPronErrors(undefined)).toEqual([]);
+    expect(rankPronErrors({})).toEqual([]);
+    expect(rankPronErrors({ words: [] })).toEqual([]);
+  });
+
+  it("returns [] for an unscripted report where every word had its phones stripped", () => {
+    const stripped = {
+      version: 1,
+      mode: "unscripted",
+      model: "mock",
+      overall: { accuracy: 40, fluency: 60, completeness: 100 },
+      words: [
+        { word: "the", start: 0, end: 0.2, accuracy: 30 },
+        { word: "sheep", start: 0.2, end: 0.9, accuracy: 20 },
+      ],
+    };
+    expect(rankPronErrors(stripped)).toEqual([]);
+  });
+
+  it("skips phone-less words in a mixed report instead of throwing", () => {
+    const mixed = report([["sheep", [["iː", 20, "ɪ"]]]]);
+    mixed.words.push({ word: "quiet", start: 1, end: 2, accuracy: 10 });
+    const errors = rankPronErrors(mixed);
+    expect(errors).toHaveLength(1);
+    expect(errors[0].word).toBe("sheep");
+  });
+
+  it("is deterministic — two runs on the same report produce the same order", () => {
+    const r = report([
+      ["a", [["t", 30], ["d", 30]]],
+      ["b", [["k", 30]]],
+    ]);
+    expect(rankPronErrors(r)).toEqual(rankPronErrors(r));
+    expect(rankPronErrors(r).map((e) => `${e.wordIndex}:${e.phoneIndex}`)).toEqual([
+      "0:0",
+      "0:1",
+      "1:0",
+    ]);
+  });
+
+  it("honours an explicit limit", () => {
+    const errors = rankPronErrors(report([["x", [["t", 1], ["d", 2], ["k", 3]]]]), { limit: 1 });
+    expect(errors).toHaveLength(1);
+    expect(errors[0].ipa).toBe("t");
+  });
+
+  it("does not mutate the report it was given", () => {
+    const r = report([["sheep", [["iː", 20, "ɪ"]]]]);
+    const snapshot = JSON.stringify(r);
+    rankPronErrors(r);
+    expect(JSON.stringify(r)).toBe(snapshot);
+  });
+});
