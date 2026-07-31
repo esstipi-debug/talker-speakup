@@ -38,6 +38,11 @@ smalltalk2me-mirror/
 __pycache__/
 *.pyc
 
+# pronunciation calibration harness (tools/calibration)
+tools/calibration/.venv/
+tools/calibration/out/
+.pytest_cache/
+
 # pronunciation sidecar (model weights cache, pytest scratch)
 sidecar/pron/.model-cache/
 sidecar/pron/.pytest_cache/

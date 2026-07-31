@@ -1,0 +1,10 @@
+# Calibration harness deps (design §8). Ranges, not pins: the exact resolved
+# versions get recorded in README.md after the first successful install, per
+# verification step V4. `datasets` is imported lazily inside
+# run_calibration.iter_records so the unit tests need no corpus download.
+datasets>=4,<5
+requests>=2.32,<3
+scipy>=1.14,<2
+numpy>=2.1,<3
+pandas>=2.2,<3
+pytest>=8,<10
