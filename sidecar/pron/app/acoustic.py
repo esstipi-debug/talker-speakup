@@ -61,7 +61,8 @@ def unk_id(tokenizer) -> int:
 
 
 def tokens_to_ids(tokenizer, tokens: list[str]) -> list[int]:
-    ids = [int(i) for i in tokenizer.convert_tokens_to_ids(list(tokens))]
+    tokens = list(tokens)  # Materialize single-use iterables to avoid silent OOV misses
+    ids = [int(i) for i in tokenizer.convert_tokens_to_ids(tokens)]
     unknown = int(tokenizer.unk_token_id)
     offenders = sorted({token for token, i in zip(tokens, ids) if i == unknown})
     if offenders:
