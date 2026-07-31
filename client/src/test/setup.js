@@ -54,6 +54,52 @@ export function makeResults(list) {
   });
 }
 
+// --- Mock MediaRecorder (jsdom has none) ---
+export class MockMediaRecorder {
+  constructor(stream, options = {}) {
+    this.stream = stream;
+    this.mimeType = options.mimeType || "audio/webm";
+    this.state = "inactive";
+    this.ondataavailable = this.onstop = this.onerror = null;
+    this.started = 0;
+    this.stopped = 0;
+    MockMediaRecorder.instances.push(this);
+  }
+  start() {
+    this.started += 1;
+    this.state = "recording";
+  }
+  stop() {
+    this.stopped += 1;
+    // The real API throws InvalidStateError when stopping an inactive recorder.
+    if (this.state === "inactive") throw new Error("InvalidStateError");
+    this.state = "inactive";
+    // The real API fires onstop asynchronously; a microtask keeps that shape
+    // without needing fake timers in every recorder test.
+    queueMicrotask(() => this.onstop?.());
+  }
+  // test helpers
+  emitData(blob) {
+    this.ondataavailable?.({ data: blob });
+  }
+  emitError(name) {
+    this.onerror?.({ error: name === undefined ? undefined : { name } });
+  }
+}
+MockMediaRecorder.instances = [];
+MockMediaRecorder.isTypeSupported = (type) => type === "audio/webm;codecs=opus";
+
+export function lastRecorder() {
+  const list = MockMediaRecorder.instances;
+  return list[list.length - 1];
+}
+
+let micTrack = null;
+/** The single MediaStreamTrack handed out by the stubbed getUserMedia this test. */
+export function lastMicTrack() {
+  return micTrack;
+}
+
 beforeEach(() => {
   MockSpeechRecognition.instances = [];
   vi.stubGlobal("SpeechRecognition", MockSpeechRecognition);
@@ -81,6 +127,19 @@ beforeEach(() => {
   window.HTMLMediaElement.prototype.pause = vi.fn();
   // jsdom has no layout engine, so Element.scrollTo is unimplemented.
   window.Element.prototype.scrollTo = vi.fn();
+  // --- mic capture stubs (jsdom has neither) ---
+  MockMediaRecorder.instances = [];
+  vi.stubGlobal("MediaRecorder", MockMediaRecorder);
+  micTrack = { kind: "audio", stop: vi.fn() };
+  Object.defineProperty(navigator, "mediaDevices", {
+    configurable: true,
+    value: { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [micTrack] }) },
+  });
+  // jsdom's Blob has no arrayBuffer(); FormData upload paths poke at it.
+  window.Blob.prototype.arrayBuffer = vi.fn().mockResolvedValue(new ArrayBuffer(8));
+  // Assigned, not vi.stubGlobal({...URL}) — spreading URL drops its constructor.
+  URL.createObjectURL = vi.fn(() => "blob:mock");
+  URL.revokeObjectURL = vi.fn();
 });
 
 afterEach(() => {
