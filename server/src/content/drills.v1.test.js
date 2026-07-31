@@ -130,6 +130,31 @@ const tokensFor = (target) => TARGET_TOKENS[target] ?? [target];
 const ipaContains = (ipa, target) =>
   ` ${ipa} `.includes(` ${tokensFor(target).join(" ")} `);
 
+// A keyWord's transcription ends in a bare /t/ or /d/ token (not preceded by /ɪ/, which
+// would make it the /ɪd/ allomorph instead), or ends in the two-token /ɪ d/ sequence.
+// Substring matching (`ipaContains`) cannot tell these apart because " ɪ d " trivially
+// contains " d ", so this checks the actual word-final position instead.
+const edEndingOf = (ipa) => {
+  const tokens = ipa.trim().split(/\s+/);
+  const last = tokens[tokens.length - 1];
+  const secondLast = tokens[tokens.length - 2];
+  if (secondLast === "ɪ" && last === "d") return "ɪd";
+  if (last === "t") return "t";
+  if (last === "d") return "d";
+  return null;
+};
+
+// A keyWord's transcription begins with /s/ immediately followed by another consonant
+// (a genuine word-initial cluster), not /s/ followed by a vowel.
+const CONSONANTS = new Set([
+  "p", "t", "k", "m", "n", "l", "ɹ", "w", "f", "b", "d", "g", "s", "ʃ", "tʃ",
+  "v", "θ", "ð", "z", "h", "j",
+]);
+const hasInitialSCluster = (ipa) => {
+  const tokens = ipa.trim().split(/\s+/);
+  return tokens[0] === "s" && tokens.length > 1 && CONSONANTS.has(tokens[1]);
+};
+
 describe("drills.v1.json — file shape", () => {
   it("declares version 1, an ISO date, and the seven frozen focus slugs", () => {
     expect(CONTENT.version).toBe(1);
@@ -217,12 +242,23 @@ describe("drills.v1.json — set size", () => {
     const ed = CONTENT.prompts.filter((p) => p.focus === "ed-ending");
     expect(ed.length).toBeGreaterThanOrEqual(3);
     for (const p of ed) {
-      for (const target of ["t", "d", "ɪd"]) {
-        const carrier = p.keyWords.find((kw) =>
-          ipaContains(IPA_LEXICON[kw.toLowerCase()] ?? "", target),
+      for (const ending of ["t", "d", "ɪd"]) {
+        const carrier = p.keyWords.find(
+          (kw) => edEndingOf(IPA_LEXICON[kw.toLowerCase()] ?? "") === ending,
         );
-        expect(carrier, `${p.id} is missing an -ed /${target}/ carrier`).toBeDefined();
+        expect(carrier, `${p.id} is missing an -ed /${ending}/ carrier`).toBeDefined();
       }
+    }
+  });
+
+  it("covers a genuine word-initial /s/ cluster in every s-cluster prompt", () => {
+    const sCluster = CONTENT.prompts.filter((p) => p.focus === "s-cluster");
+    expect(sCluster.length).toBeGreaterThanOrEqual(3);
+    for (const p of sCluster) {
+      const carrier = p.keyWords.find((kw) =>
+        hasInitialSCluster(IPA_LEXICON[kw.toLowerCase()] ?? ""),
+      );
+      expect(carrier, `${p.id} is missing a genuine s-cluster carrier`).toBeDefined();
     }
   });
 });
