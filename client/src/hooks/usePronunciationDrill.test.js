@@ -171,3 +171,61 @@ describe("usePronunciationDrill — mount", () => {
     expect(result.current.promptIndex).toBe(-1);
   });
 });
+
+describe("usePronunciationDrill — scoring round trip", () => {
+  it("walks prompt -> recording -> scoring -> result", async () => {
+    const { result } = await mounted();
+
+    act(() => { result.current.startRecording(); });
+    await waitFor(() => expect(result.current.status).toBe("recording"));
+
+    act(() => { result.current.stopRecording(); });
+    await waitFor(() => expect(result.current.status).toBe("result"));
+
+    expect(lastHandle.stop).toHaveBeenCalledTimes(1);
+    expect(result.current.report.overall.accuracy).toBe(62);
+    expect(result.current.pronProvider).toBe("mock");
+    expect(result.current.attempts).toBe(1);
+    expect(result.current.error).toBeNull();
+  });
+
+  it("sends the reference sentence of the active prompt in scripted mode", async () => {
+    const { result } = await mounted();
+    act(() => { result.current.startRecording(); });
+    await waitFor(() => expect(result.current.status).toBe("recording"));
+    act(() => { result.current.stopRecording(); });
+    await waitFor(() => expect(result.current.status).toBe("result"));
+
+    expect(postPronAssess).toHaveBeenCalledWith({
+      blob: expect.any(Blob),
+      text: "The ship is full of sheep.",
+      mode: "scripted",
+    });
+  });
+
+  it("exposes at most 3 errors, meaning-changing first", async () => {
+    const { result } = await mounted();
+    act(() => { result.current.startRecording(); });
+    await waitFor(() => expect(result.current.status).toBe("recording"));
+    act(() => { result.current.stopRecording(); });
+    await waitFor(() => expect(result.current.status).toBe("result"));
+
+    expect(result.current.errors).toHaveLength(2);
+    expect(result.current.errors[0]).toMatchObject({ ipa: "iː", substituted: "ɪ", impact: 2 });
+    expect(result.current.errors[1]).toMatchObject({ ipa: "p", substituted: null, impact: 0 });
+  });
+
+  it("counts a second successful attempt", async () => {
+    const { result } = await mounted();
+    for (const _ of [0, 1]) {
+      act(() => { result.current.startRecording(); });
+      await waitFor(() => expect(result.current.status).toBe("recording"));
+      act(() => { result.current.stopRecording(); });
+      await waitFor(() => expect(result.current.status).toBe("result"));
+      act(() => { result.current.retry(); });
+      await waitFor(() => expect(result.current.status).toBe("prompt"));
+    }
+    expect(result.current.attempts).toBe(2);
+    expect(result.current.report).toBeNull(); // retry clears the previous score
+  });
+});
