@@ -486,6 +486,7 @@ def main(argv: list[str] | None = None) -> int:
         "showNumericScores": bool(chosen and chosen.show_numeric_scores),
         "thresholds": {
             "passMinCoverage": PASS_MIN_COVERAGE,
+            "passMinPhonemeCoverage": PASS_MIN_PHONEME_COVERAGE,
             "passMinUtterancePearson": PASS_MIN_UTTERANCE_PEARSON,
             "passMinPhonemeSpearman": PASS_MIN_PHONEME_SPEARMAN,
             "fallbackMinSubstitutionF1": FALLBACK_MIN_SUBSTITUTION_F1,

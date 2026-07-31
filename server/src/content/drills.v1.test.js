@@ -147,7 +147,7 @@ const edEndingOf = (ipa) => {
 // A keyWord's transcription begins with /s/ immediately followed by another consonant
 // (a genuine word-initial cluster), not /s/ followed by a vowel.
 const CONSONANTS = new Set([
-  "p", "t", "k", "m", "n", "l", "ɹ", "w", "f", "b", "d", "g", "s", "ʃ", "tʃ",
+  "p", "t", "k", "m", "n", "l", "ɹ", "w", "f", "b", "d", "g", "s", "ʃ", "tʃ", "dʒ", "ŋ",
   "v", "θ", "ð", "z", "h", "j",
 ]);
 const hasInitialSCluster = (ipa) => {
