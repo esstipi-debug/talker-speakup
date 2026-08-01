@@ -11,6 +11,7 @@ export default defineConfig({
       "/turn": "http://localhost:3001",
       "/health": "http://localhost:3001",
       "/progress": "http://localhost:3001",
+      "/pron": "http://localhost:3001",
     },
   },
 });

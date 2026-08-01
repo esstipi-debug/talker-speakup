@@ -4,11 +4,13 @@ import MessageBubble from "./components/MessageBubble.jsx";
 import MicButton from "./components/MicButton.jsx";
 import TranscriptReview from "./components/TranscriptReview.jsx";
 import VoiceStatus from "./components/VoiceStatus.jsx";
+import DrillPanel from "./components/DrillPanel.jsx";
 import { useConversation } from "./hooks/useConversation.js";
 
 export default function App() {
   const c = useConversation();
   const [textInput, setTextInput] = useState("");
+  const [mode, setMode] = useState("conversation");
   const scrollRef = useRef(null);
 
   useEffect(() => {
@@ -60,63 +62,102 @@ export default function App() {
         stt={c.providers.stt}
       />
 
-      <main ref={scrollRef} className="flex-1 overflow-y-auto px-5 py-6 space-y-4">
-        {c.messages.map((m, i) => (
-          <MessageBubble
-            key={i}
-            role={m.role}
-            text={m.text}
-            onReplay={m.role === "coach" && c.status === "idle" ? () => c.replay(m) : undefined}
-          />
-        ))}
-        {c.status === "thinking" && (
-          <p className="text-xs text-muted pl-1">coach is composing a reply…</p>
-        )}
-      </main>
+      <ModeSwitch mode={mode} onChange={setMode} />
 
-      <footer className="px-5 pt-3 pb-5 border-t border-line/70 space-y-4">
-        <VoiceStatus
-          status={c.status}
-          liveTranscript={c.liveTranscript}
-          error={c.error}
-          ttsFallbackActive={c.ttsFallbackActive}
-          sttSupported={c.sttSupported}
-          onDismissError={c.clearError}
-        />
-
-        {c.status === "review" ? (
-          <TranscriptReview
-            draft={c.draft}
-            onEdit={c.editDraft}
-            onSend={c.send}
-            onReRecord={c.reRecord}
-            onCancel={c.cancel}
-          />
-        ) : (
-          <>
-            <div className="flex justify-center">
-              <MicButton ref={micButtonRef} status={c.status} onClick={handleMicClick} />
-            </div>
-
-            <form onSubmit={handleTextSubmit} className="flex gap-2">
-              <input
-                value={textInput}
-                onChange={(e) => setTextInput(e.target.value)}
-                disabled={busy}
-                placeholder={c.sttSupported ? "…or type your reply" : "Type your reply (no mic detected)"}
-                className="flex-1 bg-ink-2 border border-line rounded-xl px-4 py-2.5 text-sm placeholder:text-muted/70 focus:outline-none focus:ring-2 focus:ring-coach/50 disabled:opacity-50"
+      {mode === "drill" ? (
+        <main className="flex-1 overflow-y-auto">
+          <DrillPanel />
+        </main>
+      ) : (
+        <>
+          <main ref={scrollRef} className="flex-1 overflow-y-auto px-5 py-6 space-y-4">
+            {c.messages.map((m, i) => (
+              <MessageBubble
+                key={i}
+                role={m.role}
+                text={m.text}
+                onReplay={m.role === "coach" && c.status === "idle" ? () => c.replay(m) : undefined}
               />
-              <button
-                type="submit"
-                disabled={busy || !textInput.trim()}
-                className="px-4 py-2.5 rounded-xl bg-surface-2 border border-line text-sm font-medium hover:border-coach/60 hover:text-coach-soft transition disabled:opacity-40"
-              >
-                Send
-              </button>
-            </form>
-          </>
-        )}
-      </footer>
+            ))}
+            {c.status === "thinking" && (
+              <p className="text-xs text-muted pl-1">coach is composing a reply…</p>
+            )}
+          </main>
+
+          <footer className="px-5 pt-3 pb-5 border-t border-line/70 space-y-4">
+            <VoiceStatus
+              status={c.status}
+              liveTranscript={c.liveTranscript}
+              error={c.error}
+              ttsFallbackActive={c.ttsFallbackActive}
+              sttSupported={c.sttSupported}
+              onDismissError={c.clearError}
+            />
+
+            {c.status === "review" ? (
+              <TranscriptReview
+                draft={c.draft}
+                onEdit={c.editDraft}
+                onSend={c.send}
+                onReRecord={c.reRecord}
+                onCancel={c.cancel}
+              />
+            ) : (
+              <>
+                <div className="flex justify-center">
+                  <MicButton ref={micButtonRef} status={c.status} onClick={handleMicClick} />
+                </div>
+
+                <form onSubmit={handleTextSubmit} className="flex gap-2">
+                  <input
+                    value={textInput}
+                    onChange={(e) => setTextInput(e.target.value)}
+                    disabled={busy}
+                    placeholder={c.sttSupported ? "…or type your reply" : "Type your reply (no mic detected)"}
+                    className="flex-1 bg-ink-2 border border-line rounded-xl px-4 py-2.5 text-sm placeholder:text-muted/70 focus:outline-none focus:ring-2 focus:ring-coach/50 disabled:opacity-50"
+                  />
+                  <button
+                    type="submit"
+                    disabled={busy || !textInput.trim()}
+                    className="px-4 py-2.5 rounded-xl bg-surface-2 border border-line text-sm font-medium hover:border-coach/60 hover:text-coach-soft transition disabled:opacity-40"
+                  >
+                    Send
+                  </button>
+                </form>
+              </>
+            )}
+          </footer>
+        </>
+      )}
     </div>
+  );
+}
+
+const MODES = [
+  { id: "conversation", label: "Conversation" },
+  { id: "drill", label: "Pronunciation drill" },
+];
+
+// aria-pressed toggles rather than role="tab": there is no tabpanel to point
+// aria-controls at, and a dangling reference is itself an axe violation.
+function ModeSwitch({ mode, onChange }) {
+  return (
+    <nav aria-label="Practice mode" className="flex gap-2 px-5 pt-3">
+      {MODES.map((m) => (
+        <button
+          key={m.id}
+          type="button"
+          aria-pressed={mode === m.id}
+          onClick={() => onChange(m.id)}
+          className={`px-3 py-1.5 rounded-full border text-xs font-medium transition ${
+            mode === m.id
+              ? "border-coach/60 bg-coach/20 text-coach-soft"
+              : "border-line text-muted hover:border-coach/60 hover:text-coach-soft"
+          }`}
+        >
+          {m.label}
+        </button>
+      ))}
+    </nav>
   );
 }

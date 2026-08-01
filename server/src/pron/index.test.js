@@ -1,0 +1,205 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+// The factory memoizes at module scope and exposes no reset (matching brain/,
+// tts/, stt/), so every case reloads the module graph.
+async function loadPron(env = {}) {
+  vi.resetModules();
+  for (const [key, value] of Object.entries(env)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  return import("./index.js");
+}
+
+beforeEach(() => {
+  delete process.env.PRON_PROVIDER;
+  delete process.env.PRON_URL;
+  delete process.env.PRON_TIMEOUT_MS;
+  delete process.env.AZURE_SPEECH_KEY;
+  delete process.env.AZURE_SPEECH_REGION;
+  delete process.env.PRON_AZURE_MONTHLY_CAP_USD;
+  delete process.env.PRON_AZURE_RATE_PER_HOUR_USD;
+  delete process.env.PRON_BUDGET_STATE_FILE;
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+describe("pron factory — provider resolution", () => {
+  it("defaults to mock when PRON_PROVIDER is unset", async () => {
+    const { getPron, currentPronProvider } = await loadPron({ PRON_PROVIDER: undefined });
+    const { MockPron } = await import("./mock.js");
+    expect(getPron()).toBeInstanceOf(MockPron);
+    expect(currentPronProvider()).toBe("mock");
+  });
+
+  it("selects the sidecar client for PRON_PROVIDER=local", async () => {
+    const { getPron, currentPronProvider } = await loadPron({ PRON_PROVIDER: "local" });
+    const { LocalPron } = await import("./local.js");
+    expect(getPron()).toBeInstanceOf(LocalPron);
+    expect(currentPronProvider()).toBe("local");
+  });
+
+  it("trims and lowercases the env value", async () => {
+    const { currentPronProvider } = await loadPron({ PRON_PROVIDER: "  LOCAL  " });
+    expect(currentPronProvider()).toBe("local");
+  });
+
+  it("wraps azure in a spend guard when a key and region are present, keeping the reported provider name honest", async () => {
+    const { getPron, currentPronProvider } = await loadPron({
+      PRON_PROVIDER: "azure",
+      AZURE_SPEECH_KEY: "secret",
+      AZURE_SPEECH_REGION: "westeurope",
+    });
+    const { AzurePron } = await import("./azure.js");
+    const { MockPron } = await import("./mock.js");
+    const { BudgetCappedPron } = await import("./budgetCappedPron.js");
+    const pron = getPron();
+    expect(pron).toBeInstanceOf(BudgetCappedPron);
+    expect(pron.metered).toBeInstanceOf(AzurePron);
+    expect(pron.fallback).toBeInstanceOf(MockPron);
+    expect(currentPronProvider()).toBe("azure");
+  });
+
+  it("warns and falls back to mock when azure is asked for without a key", async () => {
+    const { getPron, currentPronProvider } = await loadPron({
+      PRON_PROVIDER: "azure",
+      AZURE_SPEECH_KEY: undefined,
+      AZURE_SPEECH_REGION: "westeurope",
+    });
+    const { MockPron } = await import("./mock.js");
+    expect(getPron()).toBeInstanceOf(MockPron);
+    expect(currentPronProvider()).toBe("mock");
+    expect(console.warn).toHaveBeenCalledWith(
+      "[pron] PRON_PROVIDER=azure but AZURE_SPEECH_KEY is missing → falling back to mock.",
+    );
+  });
+
+  it("treats a whitespace-only azure key as missing", async () => {
+    const { currentPronProvider } = await loadPron({
+      PRON_PROVIDER: "azure",
+      AZURE_SPEECH_KEY: "   ",
+      AZURE_SPEECH_REGION: "westeurope",
+    });
+    expect(currentPronProvider()).toBe("mock");
+  });
+
+  it("warns and falls back to mock when azure is asked for without a region (finding 7)", async () => {
+    const { getPron, currentPronProvider } = await loadPron({
+      PRON_PROVIDER: "azure",
+      AZURE_SPEECH_KEY: "secret",
+      AZURE_SPEECH_REGION: undefined,
+    });
+    const { MockPron } = await import("./mock.js");
+    expect(getPron()).toBeInstanceOf(MockPron);
+    expect(currentPronProvider()).toBe("mock");
+    expect(console.warn).toHaveBeenCalledWith(
+      "[pron] PRON_PROVIDER=azure but AZURE_SPEECH_REGION is missing → falling back to mock.",
+    );
+  });
+
+  it("treats a whitespace-only azure region as missing", async () => {
+    const { currentPronProvider } = await loadPron({
+      PRON_PROVIDER: "azure",
+      AZURE_SPEECH_KEY: "secret",
+      AZURE_SPEECH_REGION: "   ",
+    });
+    expect(currentPronProvider()).toBe("mock");
+  });
+
+  it("never auto-selects azure from AZURE_SPEECH_KEY presence alone", async () => {
+    const { getPron, currentPronProvider } = await loadPron({
+      PRON_PROVIDER: undefined,
+      AZURE_SPEECH_KEY: "secret",
+      AZURE_SPEECH_REGION: "westus",
+    });
+    const { MockPron } = await import("./mock.js");
+    expect(getPron()).toBeInstanceOf(MockPron);
+    expect(currentPronProvider()).toBe("mock");
+  });
+
+  it("warns and falls back to mock on an unknown provider", async () => {
+    const { currentPronProvider } = await loadPron({ PRON_PROVIDER: "elsa" });
+    expect(currentPronProvider()).toBe("mock");
+    expect(console.warn).toHaveBeenCalledWith(
+      '[pron] unknown PRON_PROVIDER="elsa" → falling back to mock.',
+    );
+  });
+
+  it("reads the azure spend cap, rate, and state-file path from env", async () => {
+    const { getPron } = await loadPron({
+      PRON_PROVIDER: "azure",
+      AZURE_SPEECH_KEY: "secret",
+      AZURE_SPEECH_REGION: "westeurope",
+      PRON_AZURE_MONTHLY_CAP_USD: "5",
+      PRON_AZURE_RATE_PER_HOUR_USD: "1.5",
+      PRON_BUDGET_STATE_FILE: "C:/tmp/test-budget.json",
+    });
+    const pron = getPron();
+    expect(pron.guard.capUsd).toBe(5);
+    expect(pron.guard.ratePerHourUsd).toBe(1.5);
+    expect(pron.guard.statePath).toBe("C:/tmp/test-budget.json");
+  });
+
+  it("defaults the azure spend cap, rate, and state-file path when unset", async () => {
+    const { getPron } = await loadPron({
+      PRON_PROVIDER: "azure",
+      AZURE_SPEECH_KEY: "secret",
+      AZURE_SPEECH_REGION: "westeurope",
+    });
+    const pron = getPron();
+    expect(pron.guard.capUsd).toBe(12);
+    expect(pron.guard.ratePerHourUsd).toBe(0.66);
+    expect(pron.guard.statePath).toBe(".pron-budget.json");
+  });
+
+  it("respects an explicit zero cap rather than silently substituting the default", async () => {
+    // `0 || default` would wrongly discard an intentional "spend nothing" cap — this pins that.
+    const { getPron } = await loadPron({
+      PRON_PROVIDER: "azure",
+      AZURE_SPEECH_KEY: "secret",
+      AZURE_SPEECH_REGION: "westeurope",
+      PRON_AZURE_MONTHLY_CAP_USD: "0",
+    });
+    expect(getPron().guard.capUsd).toBe(0);
+  });
+
+  it("falls back to the default cap when the env value is not a finite number", async () => {
+    // Number("not-a-number") is NaN, which is not finite — numberEnv() must not pass NaN through.
+    const { getPron } = await loadPron({
+      PRON_PROVIDER: "azure",
+      AZURE_SPEECH_KEY: "secret",
+      AZURE_SPEECH_REGION: "westeurope",
+      PRON_AZURE_MONTHLY_CAP_USD: "not-a-number",
+    });
+    expect(getPron().guard.capUsd).toBe(12);
+  });
+});
+
+describe("pron factory — memoization", () => {
+  it("constructs the provider once and logs the choice once", async () => {
+    const { getPron } = await loadPron({ PRON_PROVIDER: "local" });
+    const first = getPron();
+    const second = getPron();
+    expect(second).toBe(first);
+    expect(console.log).toHaveBeenCalledTimes(1);
+    expect(console.log).toHaveBeenCalledWith("[pron] provider = local");
+  });
+
+  it("currentPronProvider() self-primes without an explicit getPron() call", async () => {
+    const { currentPronProvider } = await loadPron({ PRON_PROVIDER: "local" });
+    expect(currentPronProvider()).toBe("local");
+    expect(console.log).toHaveBeenCalledWith("[pron] provider = local");
+  });
+
+  it("ignores a PRON_PROVIDER change after the first resolution", async () => {
+    const { getPron, currentPronProvider } = await loadPron({ PRON_PROVIDER: "local" });
+    getPron();
+    process.env.PRON_PROVIDER = "mock";
+    expect(currentPronProvider()).toBe("local");
+  });
+});

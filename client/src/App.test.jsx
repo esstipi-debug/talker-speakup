@@ -3,6 +3,12 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("./hooks/useConversation.js", () => ({ useConversation: vi.fn() }));
+// Returning a string avoids JSX inside a hoisted vi.mock factory.
+vi.mock("./components/DrillPanel.jsx", () => ({
+  default: function DrillPanelStub() {
+    return "drill-panel-stub";
+  },
+}));
 import { useConversation } from "./hooks/useConversation.js";
 import App from "./App.jsx";
 
@@ -115,5 +121,52 @@ describe("App replay gating", () => {
     );
     render(<App />);
     expect(screen.queryByTitle(/play again/i)).toBeNull();
+  });
+});
+
+describe("App mode switch", () => {
+  it("starts in conversation mode", () => {
+    useConversation.mockReturnValue(hookState({ status: "idle" }));
+    render(<App />);
+    expect(screen.getByRole("button", { name: "Conversation" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.queryByText("drill-panel-stub")).toBeNull();
+    expect(screen.getByRole("textbox")).toBeInTheDocument();
+  });
+
+  it("swaps the conversation surface for the drill panel", async () => {
+    useConversation.mockReturnValue(hookState({ status: "idle" }));
+    render(<App />);
+    await userEvent.click(screen.getByRole("button", { name: "Pronunciation drill" }));
+
+    expect(screen.getByText("drill-panel-stub")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Pronunciation drill" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    // The conversation footer is gone: no mic, no text input.
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Tap to speak" })).toBeNull();
+  });
+
+  it("returns to the conversation with its messages intact", async () => {
+    useConversation.mockReturnValue(
+      hookState({ status: "idle", messages: [{ role: "coach", text: "hi there" }] }),
+    );
+    render(<App />);
+    await userEvent.click(screen.getByRole("button", { name: "Pronunciation drill" }));
+    await userEvent.click(screen.getByRole("button", { name: "Conversation" }));
+
+    expect(screen.getByText("hi there")).toBeInTheDocument();
+    expect(screen.queryByText("drill-panel-stub")).toBeNull();
+  });
+
+  it("keeps the stat header visible in both modes", async () => {
+    useConversation.mockReturnValue(hookState({ status: "idle", totalXp: 40 }));
+    render(<App />);
+    await userEvent.click(screen.getByRole("button", { name: "Pronunciation drill" }));
+    expect(screen.getByText((_, element) => element?.textContent === "40 / 100 XP")).toBeInTheDocument();
   });
 });

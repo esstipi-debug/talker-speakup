@@ -13,6 +13,7 @@ client/coverage/
 .env
 **/.env
 !**/.env.example
+server/.pron-budget.json
 
 # sqlite database (local, single-user)
 server/prisma/dev.db
@@ -36,3 +37,12 @@ smalltalk2me-mirror/
 # python bytecode (docs/brand/generate-icons.py)
 __pycache__/
 *.pyc
+
+# pronunciation calibration harness (tools/calibration)
+tools/calibration/.venv/
+tools/calibration/out/
+.pytest_cache/
+
+# pronunciation sidecar (model weights cache, pytest scratch)
+sidecar/pron/.model-cache/
+sidecar/pron/.pytest_cache/

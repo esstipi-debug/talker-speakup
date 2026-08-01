@@ -1,0 +1,196 @@
+{
+  "version": 1,
+  "updated": "2026-07-27",
+  "focuses": ["ih-iy", "ae", "schwa", "v-b", "dzh", "s-cluster", "ed-ending"],
+  "prompts": [
+    {
+      "id": "ih-iy-01",
+      "focus": "ih-iy",
+      "text": "The ship is full of sheep.",
+      "ipaTargets": ["ɪ", "iː"],
+      "keyWords": ["ship", "sheep"],
+      "contrast": "vowel length + quality",
+      "level": "B2"
+    },
+    {
+      "id": "ih-iy-02",
+      "focus": "ih-iy",
+      "text": "He will fill the field with wheat.",
+      "ipaTargets": ["ɪ", "iː"],
+      "keyWords": ["fill", "field", "wheat"],
+      "contrast": "vowel length + quality",
+      "level": "B1"
+    },
+    {
+      "id": "ih-iy-03",
+      "focus": "ih-iy",
+      "text": "This seat is a bit cheap.",
+      "ipaTargets": ["ɪ", "iː"],
+      "keyWords": ["seat", "bit", "cheap"],
+      "contrast": "vowel length + quality",
+      "level": "B1"
+    },
+    {
+      "id": "ae-01",
+      "focus": "ae",
+      "text": "That cat sat on a black mat.",
+      "ipaTargets": ["æ"],
+      "keyWords": ["cat", "sat", "black", "mat"],
+      "contrast": "absent in Spanish",
+      "level": "A2"
+    },
+    {
+      "id": "ae-02",
+      "focus": "ae",
+      "text": "Sam had a bad plan.",
+      "ipaTargets": ["æ"],
+      "keyWords": ["sam", "had", "bad", "plan"],
+      "contrast": "absent in Spanish",
+      "level": "A2"
+    },
+    {
+      "id": "ae-03",
+      "focus": "ae",
+      "text": "The angry man ran past the cab.",
+      "ipaTargets": ["æ"],
+      "keyWords": ["angry", "man", "ran", "cab"],
+      "contrast": "absent in Spanish",
+      "level": "B1"
+    },
+    {
+      "id": "schwa-01",
+      "focus": "schwa",
+      "text": "This sofa is comfortable.",
+      "ipaTargets": ["ə"],
+      "keyWords": ["sofa", "comfortable"],
+      "contrast": "schwa reduction in unstressed syllables",
+      "level": "B1"
+    },
+    {
+      "id": "schwa-02",
+      "focus": "schwa",
+      "text": "The camera above the banana is broken.",
+      "ipaTargets": ["ə"],
+      "keyWords": ["camera", "above", "banana"],
+      "contrast": "schwa reduction in unstressed syllables",
+      "level": "B2"
+    },
+    {
+      "id": "schwa-03",
+      "focus": "schwa",
+      "text": "Another problem is the temperature.",
+      "ipaTargets": ["ə"],
+      "keyWords": ["another", "problem", "temperature"],
+      "contrast": "schwa reduction in unstressed syllables",
+      "level": "B2"
+    },
+    {
+      "id": "v-b-01",
+      "focus": "v-b",
+      "text": "Did you vote for the boat or the van?",
+      "ipaTargets": ["v", "b"],
+      "keyWords": ["vote", "boat", "van"],
+      "contrast": "phonemic in English, allophonic in Spanish",
+      "level": "B1"
+    },
+    {
+      "id": "v-b-02",
+      "focus": "v-b",
+      "text": "Very best berries have value.",
+      "ipaTargets": ["v", "b"],
+      "keyWords": ["very", "best", "berries", "value"],
+      "contrast": "phonemic in English, allophonic in Spanish",
+      "level": "B2"
+    },
+    {
+      "id": "v-b-03",
+      "focus": "v-b",
+      "text": "The brave driver bought a van.",
+      "ipaTargets": ["v", "b"],
+      "keyWords": ["brave", "driver", "bought", "van"],
+      "contrast": "phonemic in English, allophonic in Spanish",
+      "level": "B1"
+    },
+    {
+      "id": "dzh-01",
+      "focus": "dzh",
+      "text": "John judged the large jar.",
+      "ipaTargets": ["dʒ"],
+      "keyWords": ["john", "judged", "large", "jar"],
+      "contrast": "affricate absent in Spanish",
+      "level": "B1"
+    },
+    {
+      "id": "dzh-02",
+      "focus": "dzh",
+      "text": "The manager enjoys his job.",
+      "ipaTargets": ["dʒ"],
+      "keyWords": ["manager", "enjoys", "job"],
+      "contrast": "affricate absent in Spanish",
+      "level": "B1"
+    },
+    {
+      "id": "dzh-03",
+      "focus": "dzh",
+      "text": "Just imagine a giant bridge.",
+      "ipaTargets": ["dʒ"],
+      "keyWords": ["just", "imagine", "giant", "bridge"],
+      "contrast": "affricate absent in Spanish",
+      "level": "B2"
+    },
+    {
+      "id": "s-cluster-01",
+      "focus": "s-cluster",
+      "text": "She speaks Spanish in Spain every spring.",
+      "ipaTargets": ["s"],
+      "keyWords": ["speaks", "spanish", "spain", "spring"],
+      "contrast": "Spanish epenthesis (spain -> espain)",
+      "level": "B1"
+    },
+    {
+      "id": "s-cluster-02",
+      "focus": "s-cluster",
+      "text": "The student studied a strange story.",
+      "ipaTargets": ["s"],
+      "keyWords": ["student", "studied", "strange", "story"],
+      "contrast": "Spanish epenthesis (spain -> espain)",
+      "level": "B1"
+    },
+    {
+      "id": "s-cluster-03",
+      "focus": "s-cluster",
+      "text": "Stop the small van at the station.",
+      "ipaTargets": ["s"],
+      "keyWords": ["stop", "small", "station"],
+      "contrast": "Spanish epenthesis (spain -> espain)",
+      "level": "A2"
+    },
+    {
+      "id": "ed-ending-01",
+      "focus": "ed-ending",
+      "text": "She walked, played, and wanted more.",
+      "ipaTargets": ["t", "d", "ɪd"],
+      "keyWords": ["walked", "played", "wanted"],
+      "contrast": "/t/ /d/ /ɪd/ allomorphy",
+      "level": "B1"
+    },
+    {
+      "id": "ed-ending-02",
+      "focus": "ed-ending",
+      "text": "They asked, answered, and decided quickly.",
+      "ipaTargets": ["t", "d", "ɪd"],
+      "keyWords": ["asked", "answered", "decided"],
+      "contrast": "/t/ /d/ /ɪd/ allomorphy",
+      "level": "B2"
+    },
+    {
+      "id": "ed-ending-03",
+      "focus": "ed-ending",
+      "text": "He watched the film, closed the door, and needed a break.",
+      "ipaTargets": ["t", "d", "ɪd"],
+      "keyWords": ["watched", "closed", "needed"],
+      "contrast": "/t/ /d/ /ɪd/ allomorphy",
+      "level": "B1"
+    }
+  ]
+}
