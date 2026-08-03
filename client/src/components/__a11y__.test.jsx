@@ -78,7 +78,7 @@ describe("accessibility", () => {
 
   it("StatHeader has no axe violations", async () => {
     const { container } = render(
-      <StatHeader totalXp={240} turns={5} brain="mistral" tts="kokoro" stt="whisper" />,
+      <StatHeader totalXp={240} turns={5} sessionFluency={72} brain="mistral" tts="kokoro" stt="whisper" />,
     );
     expect(await axe(container)).toHaveNoViolations();
   });

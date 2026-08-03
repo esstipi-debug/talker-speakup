@@ -1,6 +1,6 @@
 const XP_PER_LEVEL = 100;
 
-export default function StatHeader({ totalXp = 0, turns = 0, brain, tts, stt }) {
+export default function StatHeader({ totalXp = 0, turns = 0, sessionFluency = null, brain, tts, stt }) {
   const level = Math.floor(totalXp / XP_PER_LEVEL) + 1;
   const xpInLevel = totalXp % XP_PER_LEVEL;
   const pct = Math.round((xpInLevel / XP_PER_LEVEL) * 100);
@@ -32,6 +32,17 @@ export default function StatHeader({ totalXp = 0, turns = 0, brain, tts, stt }) 
       </div>
 
       <div className="flex items-center gap-4 text-right">
+        {sessionFluency !== null && (
+          <div className="w-20" aria-label="delivery pace this session">
+            <div className="h-1.5 rounded-full bg-ink-2 overflow-hidden ring-1 ring-line/60">
+              <div
+                className="h-full rounded-full bg-user transition-all duration-500"
+                style={{ width: `${sessionFluency}%` }}
+              />
+            </div>
+            <div className="text-[10px] uppercase tracking-wide text-muted mt-1">pace</div>
+          </div>
+        )}
         <Stat label="turns" value={turns} />
         <div className="flex flex-col items-end gap-1">
           {brain && (

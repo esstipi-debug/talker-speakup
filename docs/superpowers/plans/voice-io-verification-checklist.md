@@ -42,3 +42,19 @@ Web Speech STT cannot be automated (needs a real mic + Google connectivity). Run
 
 ## Summary
 All code deliverables are complete and reviewed clean (Tasks 2–10, per-task Spec ✅ / Approved). The loop is verified end-to-end at the API + component level with the browser-voice fallback. Two things remain for a human with Docker + a mic: confirm real Kokoro audio, and run the manual mic checklist (including the InvalidStateError watch).
+
+---
+
+## M2 structured feedback — hand evaluation (spec §9.4, not automatable)
+
+Per `docs/superpowers/specs/2026-08-02-m2-structured-feedback-design.md` §9.4: tests verify plumbing,
+not pedagogy. No test says whether an `upgrade` is genuinely C1 or a paraphrase with airs, and no test
+quantifies Harper's real-world recall — the 12-sentence sample in §3.1 established a direction, not a
+rate.
+
+- [ ] **20 recorded utterances, judged once.** For each: is the `upgrade` genuinely what a C1 speaker
+      would say, or a paraphrase with airs? Did Harper miss errors a human would flag?
+- [ ] Record the pass/fail judgment per utterance here (or link to where it's recorded) once run.
+- [ ] If Harper's recall on L2 Spanish-speaker English proves poor, the documented fallback is adding
+      `vennify/t5-base-grammar-correction` as a third pass — a follow-up decision, not part of M2, and
+      not to be pre-committed without this evaluation's evidence.
