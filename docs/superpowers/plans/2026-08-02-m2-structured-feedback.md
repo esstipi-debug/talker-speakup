@@ -263,6 +263,18 @@ describe("lintUtterance", () => {
     const findings = await lintUtterance("I paid # 5 for it * twice");
     for (const f of findings) expect(f.lintKind).not.toBe("Formatting");
   });
+
+  // The recogniser writes the capitalization, not the learner. Both of these
+  // yield a Capitalization lint on Harper 2.7.0 (measured). Assert on the
+  // KINDS that survive, never on emptiness: if Harper later starts catching
+  // the real errors in these sentences, this test must keep passing.
+  it("drops lint kinds that are artefacts of the recogniser, not the learner", async () => {
+    const artefacts = ["Capitalization", "Punctuation", "Formatting", "Spelling", "Typo"];
+    for (const text of ["yesterday I go to the cinema with my friend", "there is many peoples in the street"]) {
+      const kinds = (await lintUtterance(text)).map((f) => f.lintKind);
+      expect(kinds.filter((k) => artefacts.includes(k))).toEqual([]);
+    }
+  });
 });
 ```
 
@@ -314,13 +326,25 @@ export function harperStatus() {
   return status;
 }
 
+/**
+ * Lint kinds that are artefacts of the pipeline, not of the learner.
+ *
+ * The transcript's capitalization and punctuation are authored by the speech
+ * recogniser, so flagging them corrects the ASR engine and spends one of the
+ * learner's two correction slots on noise. Measured on Harper 2.7.0: two of
+ * its five hits across a 12-sentence Spanish-speaker sample were
+ * Capitalization. Spelling and Typo go for the same reason — you cannot
+ * misspell out loud.
+ */
+const ASR_ARTEFACT_KINDS = new Set(["Capitalization", "Punctuation", "Formatting", "Spelling", "Typo"]);
+
 export async function lintUtterance(text) {
   if (!linter) return [];
   // language:'plaintext' is mandatory. Harper defaults to markdown, which
   // would parse spoken '#' and '*' as markup.
   const lints = await linter.lint(text, { language: "plaintext", dedup: true });
   try {
-    return lints.map((lint) => translate(lint));
+    return lints.map((lint) => translate(lint)).filter((f) => !ASR_ARTEFACT_KINDS.has(f.lintKind));
   } finally {
     // Lints are WASM handles. This process is long-lived.
     for (const lint of lints) lint.free();
@@ -1233,8 +1257,12 @@ export async function buildFeedback({ utterance, history = [], prosody = null, s
   };
 }
 
-/** Harper's documented LintKind inventory, mapped onto the ledger's types. */
-const VOCAB_KINDS = new Set(["WordChoice", "Malapropism", "Eggcorn", "Spelling", "Typo"]);
+/**
+ * Harper's documented LintKind inventory, mapped onto the ledger's types.
+ * Spelling and Typo are absent on purpose: harper.js drops them at the
+ * boundary as recogniser artefacts, so they never reach this function.
+ */
+const VOCAB_KINDS = new Set(["WordChoice", "Malapropism", "Eggcorn"]);
 const REGISTER_KINDS = new Set(["Style", "Enhancement", "Redundancy", "Readability", "Regionalism"]);
 
 function kindFor(lintKind) {

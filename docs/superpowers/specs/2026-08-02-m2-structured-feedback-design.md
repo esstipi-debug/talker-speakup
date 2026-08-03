@@ -55,11 +55,33 @@ one register/range upgrade, an honest hesitation signal, and a durable record in
 | **D7** | **Delivery via a second endpoint, `POST /feedback`** | SSE from `/turn` (concentrates complexity in `useConversation`, the most fragile module in the project, and forces stream mocking in jsdom); piggyback on the next turn (feedback arrives one turn late, which D1 rejected) |
 | **D8** | **The two passes run in series**, Harper's findings inside the LLM prompt | Parallel execution saves milliseconds (Harper is sub-millisecond) and destroys the division of labour that justifies having two passes at all |
 
-### 3.1 Why rule-based first
+### 3.1 Why rule-based first — and how much it actually covers
 
-The mechanical 70% — articles, agreement, tense, prepositions — must not depend on a model's mood.
-Harper is deterministic, local, sub-millisecond and free, so the LLM budget goes entirely to the part
-only a model can do: explaining *why*, and upgrading language that is already correct.
+Whatever rules *can* catch must not depend on a model's mood. Harper is deterministic, local,
+sub-millisecond and free, so every finding it produces is one the LLM budget does not have to buy.
+
+**Measured, not assumed** (Harper 2.7.0, 12-sentence L1-Spanish sample, 2026-08-02): Harper catches
+bare subject–verb disagreement (*"She go to school"*, *"he don't like"*), some collocation and usage
+errors (*"discussed about"*, *"since 5 years"*), and nothing at all from the calque family that
+dominates Spanish-speaker English — *"I have 30 years"*, *"I go to home yesterday"*, *"the people
+is"*, *"I am agree with you"*, *"I am boring in this class"* all return zero findings.
+
+An earlier draft of this spec claimed the rule-based pass handles "the boring 70%". **That claim was
+wrong for this population and has been withdrawn.** The two-pass architecture survives the correction
+intact — what Harper misses falls through to the LLM pass, which is exactly what the second pass is
+for — but the division of labour is not the one originally described, and the consequences are real:
+
+- The **$0, no-API-key path delivers less than first described.** It still delivers something real and
+  deterministic; it does not deliver a competent grammar corrector for a Spanish speaker. The README
+  must not imply otherwise.
+- **Recogniser artefacts are filtered at the boundary.** Two of Harper's five hits in the sample were
+  `Capitalization`. A speech transcript's capitalization and punctuation are authored by the
+  recogniser, so `Capitalization`, `Punctuation`, `Formatting`, `Spelling` and `Typo` are dropped in
+  `feedback/harper.js` and never become findings. Without that filter, ASR noise would consume the
+  learner's two correction slots.
+
+Whether to add a seq2seq third pass (`vennify/t5-base-grammar-correction`) is deferred to the hand
+evaluation in §9.4 — twelve sentences justify withdrawing a claim, not adopting a model.
 
 ### 3.2 Why `upgrades` is the point
 
@@ -363,8 +385,11 @@ refusing to ship a 61% F1 detector.
   by hand on 20 utterances. There is no CEFR classifier in this milestone.
 - That the hesitation band correlates with any published construct of fluency or confidence. It is an
   internally-defined index, reported as within-learner trend only.
-- That Harper's recall on L2 Spanish-speaker English is known. It is not measured here. If the hand
-  evaluation in §9.4 shows recall is poor, the documented fallback is
+- That the rule-based pass gives a Spanish speaker broad grammar coverage. Measured, it does not:
+  see §3.1. It catches a narrow band well and misses the calque family entirely. The honest
+  description is "a free, deterministic first pass that catches some things", not "a grammar checker".
+- That Harper's recall is *quantified*. Twelve sentences establish a direction, not a rate. The hand
+  evaluation in §9.4 is what would produce a number, and the documented fallback if it is poor remains
   `vennify/t5-base-grammar-correction` as a third pass — a decision for M2's follow-up, not a
   pre-commitment.
 - Anything about pronunciation. That is M7.
