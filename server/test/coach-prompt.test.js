@@ -40,8 +40,13 @@ describe("selectCoachPrompt", () => {
   });
 
   it("keeps the M1 baseline byte-frozen", () => {
-    // If this ever needs updating, the baseline has stopped being a baseline.
-    expect(coachSystemM1).toContain("level C1–C2");
-    expect(coachSystemM1).toContain("Do NOT correct grammar yet");
+    // The whole point of M1 is being the UNALTERED prompt that shipped before
+    // M2, so the two can be A/B'd on real conversation. A substring check
+    // would let a reworded middle sentence through and quietly invalidate
+    // every comparison made afterwards. If this test fails, either revert the
+    // edit to coachSystemM1 or accept that the baseline is gone.
+    expect(coachSystemM1).toBe(`You are SpeakUp, a warm and encouraging English conversation coach for a Spanish-speaking adult (level C1–C2).
+Keep the conversation flowing naturally. Reply with ONE short, friendly turn — a question or a response — to keep them talking.
+Speak only in English. Do NOT correct grammar yet, and do NOT add notes, labels, or translations. Output only your spoken line.`);
   });
 });

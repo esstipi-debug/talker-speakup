@@ -40,3 +40,11 @@ Reply with ONE short spoken turn. Speak only in English. Do not correct their gr
 export function selectCoachPrompt() {
   return process.env.COACH_PROMPT?.trim().toLowerCase() === "m1" ? coachSystemM1 : coachSystemM2;
 }
+
+/**
+ * Boot log label for the active prompt. Keeps the normalization logic in one
+ * place so env-var changes don't drift between selectCoachPrompt and logging.
+ */
+export function activePromptLabel() {
+  return process.env.COACH_PROMPT?.trim().toLowerCase() === "m1" ? "m1 (baseline)" : "m2";
+}

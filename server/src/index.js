@@ -4,6 +4,7 @@ import { currentTTSProvider } from "./tts/index.js";
 import { currentSTTProvider } from "./stt/index.js";
 import { currentPronProvider } from "./pronunciation/index.js";
 import { setupHarper } from "./feedback/harper.js";
+import { activePromptLabel } from "./prompts/coach-system.js";
 
 const PORT = Number(process.env.PORT) || 3001;
 
@@ -15,5 +16,5 @@ app.listen(PORT, () => {
   console.log(
     `[server] SpeakUp API → http://localhost:${PORT}  (brain: ${currentProvider()}, voice: ${currentTTSProvider()}, stt: ${currentSTTProvider()}, pron: ${currentPronProvider()})`,
   );
-  console.log(`[brain] coach prompt = ${process.env.COACH_PROMPT?.trim().toLowerCase() === "m1" ? "m1 (baseline)" : "m2"}`);
+  console.log(`[brain] coach prompt = ${activePromptLabel()}`);
 });
