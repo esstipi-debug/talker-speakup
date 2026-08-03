@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { StrictMode } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 
 let recHandlers = null;
@@ -9,6 +10,7 @@ vi.mock("../lib/api.js", () => ({
   postTurn: vi.fn(),
   postFeedback: vi.fn(),
   getHealth: vi.fn(),
+  postTurnOpen: vi.fn(),
 }));
 vi.mock("../lib/speech.js", async () => {
   const actual = await vi.importActual("../lib/speech.js");
@@ -51,7 +53,7 @@ vi.mock("../lib/micStream.js", () => ({
   isMicOpen: vi.fn(() => true),
 }));
 
-import { postTurn, postFeedback, getHealth } from "../lib/api.js";
+import { postTurn, postFeedback, getHealth, postTurnOpen } from "../lib/api.js";
 import { playAudio, speak, stopSpeaking } from "../lib/speech.js";
 import { useConversation } from "./useConversation.js";
 
@@ -60,6 +62,8 @@ beforeEach(() => {
   postTurn.mockReset();
   postFeedback.mockReset();
   postFeedback.mockResolvedValue(null);
+  postTurnOpen.mockReset();
+  postTurnOpen.mockResolvedValue(null);
   playAudio.mockClear();
   speak.mockClear();
   stopSpeaking.mockClear();
@@ -892,5 +896,99 @@ describe("useConversation — session id handling", () => {
     await waitFor(() => expect(postTurn).toHaveBeenCalledTimes(3));
     // Turn 2 came back with sessionId: null — the dead id must NOT still be "s1".
     expect(postTurn.mock.calls[2][0].sessionId).toBeNull();
+  });
+});
+
+describe("the coach opens the session", () => {
+  it("replaces the local greeting with the server's opening line", async () => {
+    postTurnOpen.mockResolvedValue({
+      coach_reply: "So — is a city better judged by its transport or its food?",
+      sessionId: "s1",
+      seedProvider: "local",
+    });
+
+    const { result } = renderHook(() => useConversation());
+    await waitFor(() => {
+      expect(result.current.messages[0].text).toContain("transport or its food");
+    });
+    expect(result.current.messages).toHaveLength(1);
+  });
+
+  it("keeps the local greeting when the server cannot be reached", async () => {
+    postTurnOpen.mockResolvedValue(null);
+
+    const { result } = renderHook(() => useConversation());
+    await waitFor(() => expect(postTurnOpen).toHaveBeenCalled());
+    expect(result.current.messages[0].text).toContain("SpeakUp coach");
+    expect(result.current.status).toBe("idle");
+  });
+
+  it("does not autoplay the opener", async () => {
+    postTurnOpen.mockResolvedValue({
+      coach_reply: "So — where do you land on it?",
+      audio: "AAAA",
+      audioFormat: "mp3",
+      sessionId: "s1",
+    });
+
+    const { result } = renderHook(() => useConversation());
+    await waitFor(() => expect(result.current.messages[0].text).toContain("where do you land"));
+    expect(playAudio).not.toHaveBeenCalled();
+    expect(speak).not.toHaveBeenCalled();
+    expect(result.current.status).toBe("idle");
+  });
+
+  // Blocker 1: StrictMode double-invokes the mount effect in dev. Both the
+  // request and the server-side commit happen before either response comes
+  // back to be discarded — the fix must stop the SECOND request from ever
+  // being sent, not just discard its response.
+  it("issues postTurnOpen only once even when the mount effect runs twice (StrictMode)", async () => {
+    postTurnOpen.mockResolvedValue({
+      coach_reply: "So — is a city better judged by its transport or its food?",
+      sessionId: "s1",
+      seedProvider: "local",
+    });
+
+    const { result } = renderHook(() => useConversation(), { wrapper: StrictMode });
+    await waitFor(() => {
+      expect(result.current.messages[0].text).toContain("transport or its food");
+    });
+    expect(postTurnOpen).toHaveBeenCalledTimes(1);
+  });
+
+  // Blocker 2: a slow opener racing a fast learner reply must not wipe the
+  // learner's own turn out of the transcript, nor steal the session id the
+  // turn already claimed.
+  it("does not let a slow opener overwrite a turn the learner already sent", async () => {
+    let resolveOpen;
+    postTurnOpen.mockImplementation(() => new Promise((r) => { resolveOpen = r; }));
+    postTurn.mockResolvedValue({ coach_reply: "Nice!", xp: 5, sessionId: "s-turn" });
+
+    const { result } = renderHook(() => useConversation());
+    await waitFor(() => expect(postTurnOpen).toHaveBeenCalled());
+
+    // Learner sends before the opener has resolved.
+    await act(async () => { await result.current.submitText("hello"); });
+    await waitFor(() => expect(result.current.messages.some((m) => m.text === "hello")).toBe(true));
+
+    // The opener finally resolves — it must not wipe the transcript or steal
+    // the session id the learner's own turn already claimed.
+    await act(async () => {
+      resolveOpen({
+        coach_reply: "So — where do you land on it?",
+        sessionId: "s-open",
+      });
+    });
+
+    const texts = result.current.messages.map((m) => m.text);
+    expect(texts).toContain("hello");
+    expect(texts).toContain("Nice!");
+    expect(postTurn.mock.calls[0][0].sessionId).toBeNull(); // opener hadn't resolved yet when the turn was sent
+
+    // The session id the turn adopted ("s-turn") must survive the opener's
+    // late resolution — a next turn must still target it, not "s-open".
+    await waitFor(() => expect(result.current.status).toBe("idle"));
+    await act(async () => { await result.current.submitText("again"); });
+    expect(postTurn.mock.calls[1][0].sessionId).toBe("s-turn");
   });
 });

@@ -25,4 +25,16 @@ export class MockBrain {
       xp: basicXp(userUtterance),
     };
   }
+
+  /**
+   * The $0 opener. It cannot reason about a topic, so it states it and asks
+   * for an opinion — which is structurally the right move even when the
+   * wording is wooden. The loop is demonstrable with no key; the pedagogy is
+   * the real brain's job.
+   */
+  async openTurn({ topic }) {
+    const subject = topic ? `Here's something I've been chewing on: ${topic}. Where do you land on it?`
+                          : "Let's get straight into it — tell me about something that annoyed you this week, and why.";
+    return { coach_reply: subject, xp: 0 };
+  }
 }

@@ -1,5 +1,5 @@
 import { basicXp } from "./scoring.js";
-import { selectCoachPrompt } from "../prompts/coach-system.js";
+import { selectCoachPrompt, buildOpeningPrompt } from "../prompts/coach-system.js";
 
 const MISTRAL_BASE = "https://api.mistral.ai/v1";
 
@@ -48,5 +48,35 @@ export class MistralBrain {
     if (!reply) throw new Error("Mistral returned an empty reply.");
 
     return { coach_reply: reply, xp: basicXp(userUtterance) };
+  }
+
+  async openTurn({ topic }) {
+    const messages = [
+      { role: "system", content: buildOpeningPrompt(topic) },
+      // A stage cue, not learner speech. It never enters the transcript and is
+      // never shown. Present because a chat completion with no user message is
+      // rejected by some providers — unverified here: no MISTRAL_API_KEY is
+      // configured in this worktree, so the step 7 probe could not run.
+      { role: "user", content: "Begin." },
+    ];
+
+    const res = await fetch(`${MISTRAL_BASE}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify({ model: this.model, messages, temperature: 0.8, max_tokens: 200 }),
+    });
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`Mistral API ${res.status}: ${body.slice(0, 200)}`);
+    }
+
+    const data = await res.json();
+    const reply = data?.choices?.[0]?.message?.content?.trim();
+    if (!reply) throw new Error("Mistral returned an empty opening line.");
+    return { coach_reply: reply, xp: 0 };
   }
 }

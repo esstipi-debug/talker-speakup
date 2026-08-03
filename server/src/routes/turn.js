@@ -3,7 +3,8 @@ import multer from "multer";
 import { getBrain } from "../brain/index.js";
 import { getTTS, currentTTSProvider } from "../tts/index.js";
 import { getSTT } from "../stt/index.js";
-import { startSession, recordTurn } from "../repo/session.js";
+import { startSession, recordTurn, recordSeed } from "../repo/session.js";
+import { nextSeed } from "../seed/index.js";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
@@ -105,6 +106,98 @@ async function persistTurn({ sessionId, utterance, prosody, captureSettings, res
     // turnId is echoed when the user row itself landed: /feedback can still
     // attach to it even if the coach row failed.
     return { sessionId: sessionUsable ? id : null, turnId };
+  }
+}
+
+/**
+ * POST /turn/open
+ * body: { sessionId?: string }
+ * resp: { coach_reply, xp, audio?, audioFormat?, ttsProvider, sessionId, seedProvider }
+ *
+ * The coach's first turn, before the learner has said anything. This exists as
+ * a sibling of POST /turn rather than as a nullable `utterance` on it: /turn's
+ * validation catches real client bugs and is worth keeping strict.
+ *
+ * The opening line is deliberately NOT the client's business to compose. The
+ * learner should never be asked "what would you like to talk about?" — that
+ * hands the work back to the person who came here to be pushed.
+ */
+router.post("/open", async (req, res) => {
+  const { sessionId } = req.body ?? {};
+
+  const seed = await nextSeed().catch(() => null);
+
+  let result;
+  try {
+    result = await getBrain().openTurn({ topic: seed?.topic ?? null });
+  } catch (err) {
+    console.error("[turn/open] brain error:", err);
+    return res.status(502).json({
+      error: "The coach brain failed to respond. Check your API key / network.",
+      detail: String(err?.message ?? err),
+    });
+  }
+
+  let audio = null;
+  let audioFormat = null;
+  const tts = getTTS();
+  if (tts && result?.coach_reply) {
+    try {
+      const out = await tts.speak(result.coach_reply);
+      audio = out.audio.toString("base64");
+      audioFormat = out.format;
+    } catch (ttsErr) {
+      console.warn("[turn/open] TTS failed → client will use browser voice:", ttsErr.message);
+    }
+  }
+
+  const persisted = await persistOpening({ sessionId, seed, coachReply: result.coach_reply });
+
+  return res.json({
+    ...result,
+    audio,
+    audioFormat,
+    ttsProvider: currentTTSProvider(),
+    sessionId: persisted.sessionId,
+    // Honesty of measurement: report the provenance we actually managed to
+    // stamp, not the in-memory seed we merely picked. If recordSeed never
+    // landed (persistence failed outright, or it threw after the opener turn
+    // itself was written), there is no stamp for later comparison to read —
+    // the response must not claim one exists.
+    seedProvider: persisted.seedProvider,
+  });
+});
+
+/**
+ * Same rule persistTurn follows: a DB failure costs the row, never the turn.
+ * Mirrors persistTurn's sessionUsable handling exactly: once recordTurn (the
+ * opener turn itself) has landed, the session id is worth handing back even
+ * if recordSeed then fails — otherwise a session that already holds the
+ * opener turn gets dropped and orphaned for no reason.
+ *
+ * seedProvider in the returned object reflects whether recordSeed actually
+ * persisted, not merely whether a seed was picked in memory — see the
+ * seedProvider comment at the call site.
+ */
+async function persistOpening({ sessionId, seed, coachReply }) {
+  let id = sessionId ?? null;
+  let sessionUsable = false;
+  let seedPersisted = false;
+  try {
+    if (!id) id = (await startSession()).id;
+    await recordTurn({ sessionId: id, role: "coach", text: coachReply });
+    sessionUsable = true; // a write to this session has now succeeded
+    if (seed) {
+      await recordSeed(id, { provider: seed.provider, topicId: seed.topicId });
+      seedPersisted = true;
+    }
+    return { sessionId: id, seedProvider: seedPersisted ? seed.provider : null };
+  } catch (dbErr) {
+    console.warn("[turn/open] persistence failed, continuing:", dbErr.message);
+    return {
+      sessionId: sessionUsable ? id : null,
+      seedProvider: seedPersisted ? seed.provider : null,
+    };
   }
 }
 

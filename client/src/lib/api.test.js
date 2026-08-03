@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { postFeedback } from "./api.js";
+import { postFeedback, postTurnOpen } from "./api.js";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -32,5 +32,28 @@ describe("postFeedback", () => {
       json: async () => { throw new SyntaxError("Unexpected end of JSON input"); },
     }));
     await expect(postFeedback({ utterance: "hi", turnId: "t1" })).resolves.toBeNull();
+  });
+});
+
+describe("postTurnOpen", () => {
+  it("posts the session id and returns the payload", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ coach_reply: "So — where do you land on it?", sessionId: "s1", seedProvider: "local" }),
+    });
+
+    const out = await postTurnOpen({ sessionId: "s1" });
+    expect(out.coach_reply).toBe("So — where do you land on it?");
+    expect(global.fetch).toHaveBeenCalledWith("/turn/open", expect.objectContaining({ method: "POST" }));
+  });
+
+  it("resolves to null on a server error rather than throwing", async () => {
+    global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 502, json: async () => ({}) });
+    expect(await postTurnOpen({})).toBeNull();
+  });
+
+  it("resolves to null when the network is down", async () => {
+    global.fetch = vi.fn().mockRejectedValue(new Error("offline"));
+    expect(await postTurnOpen({})).toBeNull();
   });
 });
