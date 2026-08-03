@@ -7,6 +7,7 @@ let nextStartThrows = false; // flip true to force the next recognizer.start() -
 
 vi.mock("../lib/api.js", () => ({
   postTurn: vi.fn(),
+  postFeedback: vi.fn(),
   getHealth: vi.fn(),
 }));
 vi.mock("../lib/speech.js", async () => {
@@ -50,13 +51,15 @@ vi.mock("../lib/micStream.js", () => ({
   isMicOpen: vi.fn(() => true),
 }));
 
-import { postTurn, getHealth } from "../lib/api.js";
+import { postTurn, postFeedback, getHealth } from "../lib/api.js";
 import { playAudio, speak, stopSpeaking } from "../lib/speech.js";
 import { useConversation } from "./useConversation.js";
 
 beforeEach(() => {
   getHealth.mockResolvedValue({ brain: "mock", tts: "kokoro", stt: "none" });
   postTurn.mockReset();
+  postFeedback.mockReset();
+  postFeedback.mockResolvedValue(null);
   playAudio.mockClear();
   speak.mockClear();
   stopSpeaking.mockClear();
@@ -77,7 +80,7 @@ describe("useConversation — text path", () => {
     expect(postTurn).toHaveBeenCalledWith(
       expect.objectContaining({
         utterance: "I went hiking",
-        history: expect.arrayContaining([{ role: "user", text: "I went hiking" }]),
+        history: expect.arrayContaining([expect.objectContaining({ role: "user", text: "I went hiking" })]),
       }),
     );
 
@@ -116,6 +119,64 @@ describe("useConversation — text path", () => {
     await waitFor(() => expect(result.current.providers.tts).toBe("kokoro"));
     act(() => result.current.submitText("   "));
     expect(result.current.messages).toHaveLength(1); // greeting only
+  });
+});
+
+describe("useConversation — deferred feedback", () => {
+  it("attaches feedback to the message that produced it, not the newest one", async () => {
+    let resolveFirst;
+    postFeedback
+      .mockImplementationOnce(() => new Promise((r) => { resolveFirst = r; }))
+      // Never resolves within the test: with real (non-fake) timers, a second
+      // resolved mock would settle before the assertions run regardless of
+      // attachment order, which would prove nothing about the race. Leaving
+      // it pending isolates the one thing under test — that turn 1's late
+      // payload lands on message 1, not on whichever message is newest.
+      .mockImplementationOnce(() => new Promise(() => {}));
+    postTurn.mockResolvedValue({ coach_reply: "ok", xp: 5, sessionId: "s1", turnId: "t1" });
+
+    const { result } = renderHook(() => useConversation());
+
+    await act(async () => { await result.current.submitText("first utterance"); });
+    await act(async () => { await result.current.submitText("second utterance"); });
+
+    // The first turn's feedback arrives only now, after a second turn exists.
+    await act(async () => {
+      resolveFirst({
+        corrections: [{ span: [0, 5], original: "first", suggestion: "1st", message: "m", kind: "grammar", pattern: "p", source: "harper" }],
+        upgrades: [],
+        passes: { mechanical: "ok", pedagogical: "ok" },
+      });
+    });
+
+    const userMessages = result.current.messages.filter((m) => m.role === "user");
+    expect(userMessages[0].feedback.corrections).toHaveLength(1);
+    expect(userMessages[1].feedback).toBeNull();
+  });
+
+  // Spec §5.2: correction spans are offsets into this exact string.
+  it("sends /feedback the byte-identical utterance it sent /turn", async () => {
+    postTurn.mockResolvedValue({ coach_reply: "ok", xp: 5, sessionId: "s1", turnId: "t1" });
+    postFeedback.mockResolvedValue(null);
+
+    const messy = "  I have 30 years, y'know...  ";
+    const { result } = renderHook(() => useConversation());
+    await act(async () => { await result.current.submitText(messy); });
+
+    const sentToTurn = postTurn.mock.calls[0][0].utterance;
+    const sentToFeedback = postFeedback.mock.calls[0][0].utterance;
+    expect(sentToFeedback).toBe(sentToTurn);
+  });
+
+  it("leaves the conversation intact when feedback fails", async () => {
+    postTurn.mockResolvedValue({ coach_reply: "ok", xp: 5, sessionId: "s1", turnId: "t1" });
+    postFeedback.mockResolvedValue(null);
+
+    const { result } = renderHook(() => useConversation());
+    await act(async () => { await result.current.submitText("hello there"); });
+
+    expect(result.current.error).toBeNull();
+    expect(result.current.messages.filter((m) => m.role === "user")[0].feedback).toBeNull();
   });
 });
 
@@ -215,7 +276,7 @@ describe("useConversation — speech machine", () => {
     expect(postTurn).toHaveBeenCalledWith(
       expect.objectContaining({
         utterance: "I like it a lot",
-        history: expect.arrayContaining([{ role: "user", text: "I like it a lot" }]),
+        history: expect.arrayContaining([expect.objectContaining({ role: "user", text: "I like it a lot" })]),
       }),
     );
   });

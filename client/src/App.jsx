@@ -5,6 +5,7 @@ import MicButton from "./components/MicButton.jsx";
 import TranscriptReview from "./components/TranscriptReview.jsx";
 import VoiceStatus from "./components/VoiceStatus.jsx";
 import PauseNote from "./components/PauseNote.jsx";
+import FeedbackPanel from "./components/FeedbackPanel.jsx";
 import { useConversation } from "./hooks/useConversation.js";
 
 export default function App() {
@@ -57,6 +58,7 @@ export default function App() {
       <StatHeader
         totalXp={c.totalXp}
         turns={c.turns}
+        sessionFluency={c.sessionFluency}
         brain={c.providers.brain}
         tts={c.providers.tts}
         stt={c.providers.stt}
@@ -64,12 +66,13 @@ export default function App() {
 
       <main ref={scrollRef} className="flex-1 overflow-y-auto px-5 py-6 space-y-4">
         {c.messages.map((m, i) => (
-          <Fragment key={i}>
+          <Fragment key={m.id}>
             <MessageBubble
               role={m.role}
               text={m.text}
               onReplay={m.role === "coach" && c.status === "idle" ? () => c.replay(m) : undefined}
             />
+            {m.role === "user" && <FeedbackPanel feedback={m.feedback} />}
             {i === lastUserIndex && <PauseNote note={c.pauseNote} />}
           </Fragment>
         ))}

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { postTurn, getHealth } from "../lib/api.js";
+import { postTurn, postFeedback, getHealth } from "../lib/api.js";
 import {
   createRecognizer,
   isSTTSupported,
@@ -30,13 +30,20 @@ const NO_SPEECH_MSG = "Didn't catch that — try again or type.";
 /** UNCALIBRATED — spec §7.4: at most one pause note per this many turns. */
 const PAUSE_NOTE_TURN_INTERVAL = 3;
 
+/** Cheap vowel-group syllable estimate — the session rate needs a count, not a phonetician. */
+function countSyllables(messages) {
+  return messages
+    .filter((m) => m.role === "user")
+    .reduce((n, m) => n + (m.text.toLowerCase().match(/[aeiouy]+/g)?.length ?? 0), 0);
+}
+
 /**
  * Owns the whole conversation loop: providers, the turn round-trip, a single
  * playback controller for the coach voice, and the speech capture state
  * machine (idle -> listening -> review -> thinking -> speaking -> idle).
  */
 export function useConversation() {
-  const [messages, setMessages] = useState([{ role: "coach", text: GREETING }]);
+  const [messages, setMessages] = useState([{ id: 0, role: "coach", text: GREETING }]);
   const [status, setStatus] = useState("idle");
   const [draft, setDraft] = useState(""); // finalized text, then editable in review
   const [interim, setInterim] = useState(""); // live non-final tail during listening
@@ -46,6 +53,7 @@ export function useConversation() {
   const [ttsFallbackActive, setTtsFallbackActive] = useState(false);
   const [pauseNote, setPauseNote] = useState(null);
   const [sessionPauseCounts, setSessionPauseCounts] = useState({ total: 0, internal: 0, boundary: 0, unknown: 0 });
+  const [sessionFluency, setSessionFluency] = useState(null);
   const finalizationsRef = useRef([]);
 
   const recognizerRef = useRef(null);
@@ -59,6 +67,11 @@ export function useConversation() {
   const lastTurnProsodyRef = useRef(null);
   const turnIndexRef = useRef(0); // counts completed recordings, for pause-note throttling
   const lastNoteTurnRef = useRef(-Infinity); // turnIndexRef value when a note was last shown
+  // Monotonic local ids. The client keys feedback by localId; the SERVER keys
+  // idempotency by turnId. Different keys for different jobs: the client's id
+  // exists before the server has replied.
+  const nextMsgIdRef = useRef(1);
+  const sessionPhonationRef = useRef(0);
 
   const statusRef = useRef("idle");
   const draftRef = useRef("");
@@ -113,7 +126,7 @@ export function useConversation() {
   // ---------------- turn engine ----------------
   async function runTurn(utterance) {
     setError(null);
-    const userMsg = { role: "user", text: utterance };
+    const userMsg = { id: nextMsgIdRef.current++, role: "user", text: utterance, feedback: null };
     const historyBefore = messagesRef.current;
     setMessages((prev) => [...prev, userMsg]);
     setStatus("thinking");
@@ -122,7 +135,7 @@ export function useConversation() {
     const prosody = lastTurnProsodyRef.current;
     const captureSettings = getCaptureSettings();
     try {
-      const { coach_reply, xp, audio, audioFormat, sessionId } = await postTurn({
+      const { coach_reply, xp, audio, audioFormat, sessionId, turnId } = await postTurn({
         utterance,
         history: [...historyBefore, userMsg],
         sessionId: sessionIdRef.current,
@@ -144,19 +157,40 @@ export function useConversation() {
           unknown: prev.unknown + prosody.unknown,
         }));
       }
-      setMessages((prev) => [...prev, { role: "coach", text: coach_reply, audio, audioFormat }]);
+      setMessages((prev) => [...prev, { id: nextMsgIdRef.current++, role: "coach", text: coach_reply, audio, audioFormat }]);
       if (typeof xp === "number") setTotalXp((v) => v + xp);
 
       const expectedServerVoice = providersRef.current.tts && providersRef.current.tts !== "browser";
       if (!audio && expectedServerVoice) setTtsFallbackActive(true);
       else if (audio) setTtsFallbackActive(false);
       playCoach(coach_reply, audio, audioFormat);
+
+      // Deferred feedback (spec D1): fire and forget. The panel fills in on an
+      // already-rendered message; nothing here is allowed to block the voice.
+      requestFeedback({ utterance, turnId, historyBefore, userMsg, prosody });
     } catch (err) {
       setMessages(historyBefore); // optimistic rollback (retry re-adds exactly one turn)
       setError(err.message || "The coach brain failed to respond.");
       setDraft(utterance);
       setStatus("review");
     }
+  }
+
+  async function requestFeedback({ utterance, turnId, historyBefore, userMsg, prosody }) {
+    const payload = await postFeedback({
+      utterance,
+      turnId,
+      history: historyBefore,
+      prosody,
+      sessionPhonationMs: sessionPhonationRef.current,
+      sessionSyllables: countSyllables(messagesRef.current),
+    });
+    if (!payload) return; // degraded view, not an error — never touch `error`
+
+    // Match by the message's OWN id. Indexing off the end of the array would
+    // attach this turn's feedback to whatever the learner said next.
+    setMessages((prev) => prev.map((m) => (m.id === userMsg.id ? { ...m, feedback: payload } : m)));
+    if (typeof payload.sessionFluency === "number") setSessionFluency(payload.sessionFluency);
   }
 
   // ---------------- speech capture ----------------
@@ -171,6 +205,9 @@ export function useConversation() {
     const pauses = detectPauses(frames, { hopMs: getHopMs() });
     const classified = classifyPauses(pauses, finalizationsRef.current);
     const counts = summarise(classified);
+    // Phonation = elapsed capture minus measured silence, the input the
+    // session-level articulation rate needs (spec §6.2).
+    sessionPhonationRef.current += Math.max(0, micNowMs() - pauses.reduce((ms, p) => ms + p.durationMs, 0));
     // The session tally is NOT touched here: it only accumulates once the
     // learner actually sends the turn (see runTurn) — otherwise a re-recorded
     // or cancelled take would be counted before the learner ever decided.
@@ -354,6 +391,7 @@ export function useConversation() {
     interim,
     liveTranscript: `${draft} ${interim}`.trim(),
     totalXp,
+    sessionFluency,
     error,
     providers,
     ttsFallbackActive,
