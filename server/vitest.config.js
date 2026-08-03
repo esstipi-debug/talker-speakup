@@ -13,5 +13,12 @@ export default defineConfig({
     // so running test files in parallel forks risks SQLITE_BUSY. Force
     // sequential file execution instead.
     fileParallelism: false,
+    coverage: {
+      provider: "v8",
+      // Globs, not file lists: later tasks add modules to these directories
+      // and are covered the moment they land.
+      include: ["src/feedback/**/*.js", "src/metrics/**/*.js"],
+      thresholds: { lines: 80, functions: 80, branches: 80, statements: 80 },
+    },
   },
 });

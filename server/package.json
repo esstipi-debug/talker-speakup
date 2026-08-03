@@ -8,6 +8,7 @@
     "start": "node --env-file=.env src/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio"
@@ -16,9 +17,11 @@
     "@prisma/client": "^6.19.3",
     "cors": "^2.8.6",
     "express": "^5.2.1",
+    "harper.js": "2.7.0",
     "multer": "^2.2.0"
   },
   "devDependencies": {
+    "@vitest/coverage-v8": "^4.1.10",
     "prisma": "^6.19.3",
     "supertest": "^7.2.2",
     "vitest": "^4.1.10"
