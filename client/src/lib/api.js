@@ -45,3 +45,21 @@ export async function postTurnAudio({ blob, history }) {
   }
   return res.json(); // { transcript, coach_reply, xp, audio?, audioFormat?, ttsProvider }
 }
+
+/**
+ * Deferred structured feedback. Never throws: a missing panel is a degraded
+ * view, not a conversation error, and must not surface as one.
+ */
+export async function postFeedback({ utterance, turnId, history, prosody, sessionPhonationMs, sessionSyllables }) {
+  try {
+    const res = await fetch("/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ utterance, turnId, history, prosody, sessionPhonationMs, sessionSyllables }),
+    });
+    if (!res.ok) return null;
+    return res.json();
+  } catch {
+    return null;
+  }
+}
