@@ -44,6 +44,45 @@ describe("POST /feedback", () => {
     expect(buildFeedback).toHaveBeenCalledTimes(1);
   });
 
+  it("de-dupes two concurrent requests for the same turnId (TOCTOU guard)", async () => {
+    const turnId = await makeTurn("I have 30 years");
+
+    let resolveBuild;
+    buildFeedback.mockReset();
+    buildFeedback.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveBuild = resolve;
+        }),
+    );
+
+    // supertest/superagent only dispatches a request once `.then`/`.end` is
+    // called, so build both promises and hand them to Promise.all in one
+    // synchronous step — that fires both HTTP requests back-to-back, before
+    // either has a chance to finish, guaranteeing the second arrives while
+    // the first is still in flight rather than relying on timing luck.
+    const both = Promise.all([
+      request(app).post("/feedback").send({ utterance: "I have 30 years", turnId }),
+      request(app).post("/feedback").send({ utterance: "I have 30 years", turnId }),
+    ]);
+
+    // Wait for buildFeedback to actually be invoked (it is only called once,
+    // by whichever request wins the in-flight race) before resolving it —
+    // this keeps the test deterministic instead of racing a fixed delay.
+    for (let i = 0; i < 50 && !resolveBuild; i++) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    expect(resolveBuild).toBeTypeOf("function");
+    resolveBuild(PAYLOAD);
+
+    const [firstRes, secondRes] = await both;
+
+    expect(firstRes.status).toBe(200);
+    expect(secondRes.status).toBe(200);
+    expect(firstRes.body).toEqual(secondRes.body);
+    expect(buildFeedback).toHaveBeenCalledTimes(1);
+  });
+
   it("still answers when there is no turnId to persist against", async () => {
     const res = await request(app).post("/feedback").send({ utterance: "no turn id here" });
     expect(res.status).toBe(200);
