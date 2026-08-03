@@ -58,7 +58,10 @@ export async function postFeedback({ utterance, turnId, history, prosody, sessio
       body: JSON.stringify({ utterance, turnId, history, prosody, sessionPhonationMs, sessionSyllables }),
     });
     if (!res.ok) return null;
-    return res.json();
+    // Awaited (not returned bare): a promise returned from inside a try block
+    // is not adopted by that try — its rejection would skip this catch
+    // entirely. A 200 with a truncated/non-JSON body must still resolve null.
+    return await res.json();
   } catch {
     return null;
   }

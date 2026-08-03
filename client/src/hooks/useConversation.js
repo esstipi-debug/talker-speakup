@@ -30,6 +30,15 @@ const NO_SPEECH_MSG = "Didn't catch that — try again or type.";
 /** UNCALIBRATED — spec §7.4: at most one pause note per this many turns. */
 const PAUSE_NOTE_TURN_INTERVAL = 3;
 
+// The server only consumes { role, text } per history entry. From turn 3
+// onward a bare `messages` array would re-upload every prior message's
+// `feedback` payload on every /turn request, and every prior coach message's
+// base64 `audio` on every /feedback request — that grows unbounded and can
+// reach megabytes. Strip to the wire shape right before every send.
+function toWireHistory(messages) {
+  return messages.map((m) => ({ role: m.role, text: m.text }));
+}
+
 /** Cheap vowel-group syllable estimate — the session rate needs a count, not a phonetician. */
 function countSyllables(messages) {
   return messages
@@ -137,7 +146,7 @@ export function useConversation() {
     try {
       const { coach_reply, xp, audio, audioFormat, sessionId, turnId } = await postTurn({
         utterance,
-        history: [...historyBefore, userMsg],
+        history: toWireHistory([...historyBefore, userMsg]),
         sessionId: sessionIdRef.current,
         prosody,
         captureSettings,
@@ -156,6 +165,7 @@ export function useConversation() {
           boundary: prev.boundary + prosody.boundary,
           unknown: prev.unknown + prosody.unknown,
         }));
+        sessionPhonationRef.current += prosody.phonationMs ?? 0;
       }
       setMessages((prev) => [...prev, { id: nextMsgIdRef.current++, role: "coach", text: coach_reply, audio, audioFormat }]);
       if (typeof xp === "number") setTotalXp((v) => v + xp);
@@ -167,9 +177,18 @@ export function useConversation() {
 
       // Deferred feedback (spec D1): fire and forget. The panel fills in on an
       // already-rendered message; nothing here is allowed to block the voice.
-      requestFeedback({ utterance, turnId, historyBefore, userMsg, prosody });
+      // The trailing .catch is defence in depth — postFeedback already
+      // swallows its own errors, but the call site must not depend on that
+      // upstream contract to stay safe from an unhandled rejection.
+      requestFeedback({ utterance, turnId, historyBefore, userMsg, prosody }).catch(() => {});
     } catch (err) {
-      setMessages(historyBefore); // optimistic rollback (retry re-adds exactly one turn)
+      // Roll back by identity, not by snapshot: `historyBefore` was captured
+      // before this turn started, so restoring it wholesale would also wipe
+      // out feedback that already landed on an EARLIER, unrelated message
+      // while this turn was in flight (the exact race the deferred design
+      // creates). Removing just this turn's own message preserves everything
+      // else, including any feedback attached to it since.
+      setMessages((prev) => prev.filter((m) => m.id !== userMsg.id));
       setError(err.message || "The coach brain failed to respond.");
       setDraft(utterance);
       setStatus("review");
@@ -180,10 +199,14 @@ export function useConversation() {
     const payload = await postFeedback({
       utterance,
       turnId,
-      history: historyBefore,
+      history: toWireHistory(historyBefore),
       prosody,
       sessionPhonationMs: sessionPhonationRef.current,
-      sessionSyllables: countSyllables(messagesRef.current),
+      // Read from the values already in scope, not messagesRef: the ref is
+      // only updated by an effect, so it can lag behind and drop the
+      // just-sent utterance if this resolves within the same microtask
+      // sweep as the state update.
+      sessionSyllables: countSyllables([...historyBefore, userMsg]),
     });
     if (!payload) return; // degraded view, not an error — never touch `error`
 
@@ -205,13 +228,20 @@ export function useConversation() {
     const pauses = detectPauses(frames, { hopMs: getHopMs() });
     const classified = classifyPauses(pauses, finalizationsRef.current);
     const counts = summarise(classified);
-    // Phonation = elapsed capture minus measured silence, the input the
-    // session-level articulation rate needs (spec §6.2).
-    sessionPhonationRef.current += Math.max(0, micNowMs() - pauses.reduce((ms, p) => ms + p.durationMs, 0));
+    // Phonation = elapsed capture minus measured silence (spec §6.2). This
+    // OVERSTATES phonation — leading/trailing silence and sub-250ms gaps
+    // below detectPauses' floor are booked as speech — a measurement
+    // question for a later milestone, not fixed here; treat the resulting
+    // rate as indicative, not precise. Computed here (this is the only place
+    // with the frame contour) but carried on lastTurnProsodyRef rather than
+    // accumulated directly: this function runs on every recording end,
+    // including takes the learner then cancels or re-records, and the
+    // session tally must only count what was actually sent (see runTurn).
+    const phonationMs = Math.max(0, micNowMs() - pauses.reduce((ms, p) => ms + p.durationMs, 0));
     // The session tally is NOT touched here: it only accumulates once the
     // learner actually sends the turn (see runTurn) — otherwise a re-recorded
     // or cancelled take would be counted before the learner ever decided.
-    lastTurnProsodyRef.current = counts;
+    lastTurnProsodyRef.current = { ...counts, phonationMs };
 
     turnIndexRef.current += 1;
     const sentence = pauseSentence(counts);

@@ -80,7 +80,7 @@ describe("useConversation — text path", () => {
     expect(postTurn).toHaveBeenCalledWith(
       expect.objectContaining({
         utterance: "I went hiking",
-        history: expect.arrayContaining([expect.objectContaining({ role: "user", text: "I went hiking" })]),
+        history: expect.arrayContaining([{ role: "user", text: "I went hiking" }]),
       }),
     );
 
@@ -177,6 +177,67 @@ describe("useConversation — deferred feedback", () => {
 
     expect(result.current.error).toBeNull();
     expect(result.current.messages.filter((m) => m.role === "user")[0].feedback).toBeNull();
+  });
+
+  // Coordinator fix round 1, finding 2: a snapshot rollback captured before
+  // this turn started would also wipe out feedback that already landed on an
+  // EARLIER message while this turn was in flight — the server has already
+  // de-duplicated by turnId, so that feedback never comes back.
+  it("preserves feedback that already landed on an earlier message when a later turn's postTurn fails", async () => {
+    postFeedback.mockResolvedValueOnce({
+      corrections: [{ span: [0, 5], original: "first", suggestion: "1st", message: "m", kind: "grammar", pattern: "p", source: "harper" }],
+      upgrades: [],
+      passes: { mechanical: "ok", pedagogical: "ok" },
+    });
+    postTurn.mockResolvedValueOnce({ coach_reply: "ok", xp: 5, sessionId: "s1", turnId: "t1" });
+    postTurn.mockRejectedValueOnce(new Error("boom"));
+
+    const { result } = renderHook(() => useConversation());
+    await act(async () => { await result.current.submitText("first utterance"); });
+    await waitFor(() => {
+      expect(result.current.messages.filter((m) => m.role === "user")[0].feedback).not.toBeNull();
+    });
+
+    await act(async () => { await result.current.submitText("second utterance"); });
+    await waitFor(() => expect(result.current.error).toBe("boom"));
+
+    const userMessages = result.current.messages.filter((m) => m.role === "user");
+    expect(userMessages).toHaveLength(1); // turn 2's optimistic bubble rolled back
+    expect(userMessages[0].feedback.corrections).toHaveLength(1); // turn 1's feedback survived
+  });
+
+  // Coordinator fix round 1, finding 4: from turn 3 onward a bare `messages`
+  // array would re-upload every prior message's `feedback` (to /turn) and
+  // every prior coach message's base64 `audio` (to /feedback) on every
+  // subsequent request — unbounded growth, potentially megabytes.
+  it("never re-uploads a message's feedback or audio in the history sent to either endpoint", async () => {
+    postFeedback.mockResolvedValue({
+      corrections: [{ span: [0, 3], original: "foo", suggestion: "bar", message: "m", kind: "grammar", pattern: "p", source: "harper" }],
+      upgrades: [],
+      passes: { mechanical: "ok", pedagogical: "ok" },
+    });
+    postTurn.mockResolvedValue({ coach_reply: "ok", xp: 1, sessionId: "s1", turnId: "t1", audio: "AAAA", audioFormat: "mp3" });
+    // Coach message 1 carries real audio; make sure playback still resolves
+    // to idle so a second turn can be submitted in this test.
+    playAudio.mockImplementationOnce((_audio, opts) => {
+      opts?.onEnd?.();
+      return { pause: vi.fn() };
+    });
+
+    const { result } = renderHook(() => useConversation());
+    await act(async () => { await result.current.submitText("first"); });
+    await waitFor(() => {
+      expect(result.current.messages.filter((m) => m.role === "user")[0].feedback).not.toBeNull();
+    });
+    await act(async () => { await result.current.submitText("second"); });
+
+    const turnHistory = postTurn.mock.calls.at(-1)[0].history;
+    const feedbackHistory = postFeedback.mock.calls.at(-1)[0].history;
+    for (const entry of [...turnHistory, ...feedbackHistory]) {
+      expect(entry).not.toHaveProperty("feedback");
+      expect(entry).not.toHaveProperty("audio");
+      expect(Object.keys(entry).sort()).toEqual(["role", "text"]);
+    }
   });
 });
 
@@ -276,7 +337,7 @@ describe("useConversation — speech machine", () => {
     expect(postTurn).toHaveBeenCalledWith(
       expect.objectContaining({
         utterance: "I like it a lot",
-        history: expect.arrayContaining([expect.objectContaining({ role: "user", text: "I like it a lot" })]),
+        history: expect.arrayContaining([{ role: "user", text: "I like it a lot" }]),
       }),
     );
   });
@@ -746,6 +807,29 @@ describe("useConversation — pause profile", () => {
     expect(postTurn.mock.calls[0][0].prosody).toBeNull();
     await waitFor(() => expect(result.current.status).toBe("idle"));
     expect(result.current.sessionPauseCounts).toEqual({ total: 0, internal: 0, boundary: 0, unknown: 0 });
+  });
+
+  it("does not credit phonation for a cancelled take, only for what was actually sent", async () => {
+    // Long, uniformly loud contour: a big potential phonation credit if this
+    // cancelled take were wrongly counted (the bug: computePauseProfile runs
+    // on every recording end, including ones the learner then discards).
+    mic.getFrames.mockReturnValue(buildFrames([[5000, -20]]));
+    let t = 0;
+    mic.micNowMs.mockImplementation(() => (t += 5000));
+
+    postTurn.mockResolvedValue({ coach_reply: "ok", xp: 1, sessionId: "s1", turnId: "t1" });
+    postFeedback.mockResolvedValue(null);
+
+    const { result } = await mountedProsody();
+    await act(async () => { result.current.startListening(); });
+    act(() => recHandlers.onResult("long take"));
+    await act(async () => { result.current.stopListening(); }); // -> review
+    act(() => result.current.cancel()); // discarded forever — must not contribute phonation
+
+    await act(async () => { await result.current.submitText("typed instead"); });
+
+    await waitFor(() => expect(postFeedback).toHaveBeenCalledTimes(1));
+    expect(postFeedback.mock.calls[0][0].sessionPhonationMs).toBe(0);
   });
 });
 

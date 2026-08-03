@@ -22,4 +22,15 @@ describe("postFeedback", () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
     await expect(postFeedback({ utterance: "hi", turnId: "t1" })).resolves.toBeNull();
   });
+
+  // A promise returned bare from inside a try block is not adopted by that
+  // try — a truncated/non-JSON body on an otherwise-ok response must still
+  // resolve null, not reject with an unhandled rejection.
+  it("returns null instead of rejecting when a 200 response's body fails to parse", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => { throw new SyntaxError("Unexpected end of JSON input"); },
+    }));
+    await expect(postFeedback({ utterance: "hi", turnId: "t1" })).resolves.toBeNull();
+  });
 });
