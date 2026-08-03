@@ -3,7 +3,8 @@ import multer from "multer";
 import { getBrain } from "../brain/index.js";
 import { getTTS, currentTTSProvider } from "../tts/index.js";
 import { getSTT } from "../stt/index.js";
-import { startSession, recordTurn } from "../repo/session.js";
+import { startSession, recordTurn, recordSeed } from "../repo/session.js";
+import { nextSeed } from "../seed/index.js";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
@@ -105,6 +106,78 @@ async function persistTurn({ sessionId, utterance, prosody, captureSettings, res
     // turnId is echoed when the user row itself landed: /feedback can still
     // attach to it even if the coach row failed.
     return { sessionId: sessionUsable ? id : null, turnId };
+  }
+}
+
+/**
+ * POST /turn/open
+ * body: { sessionId?: string }
+ * resp: { coach_reply, xp, audio?, audioFormat?, ttsProvider, sessionId, seedProvider }
+ *
+ * The coach's first turn, before the learner has said anything. This exists as
+ * a sibling of POST /turn rather than as a nullable `utterance` on it: /turn's
+ * validation catches real client bugs and is worth keeping strict.
+ *
+ * The opening line is deliberately NOT the client's business to compose. The
+ * learner should never be asked "what would you like to talk about?" — that
+ * hands the work back to the person who came here to be pushed.
+ */
+router.post("/open", async (req, res) => {
+  const { sessionId } = req.body ?? {};
+
+  const seed = await nextSeed().catch(() => null);
+
+  let result;
+  try {
+    result = await getBrain().openTurn({ topic: seed?.topic ?? null });
+  } catch (err) {
+    console.error("[turn/open] brain error:", err);
+    return res.status(502).json({
+      error: "The coach brain failed to respond. Check your API key / network.",
+      detail: String(err?.message ?? err),
+    });
+  }
+
+  let audio = null;
+  let audioFormat = null;
+  const tts = getTTS();
+  if (tts && result?.coach_reply) {
+    try {
+      const out = await tts.speak(result.coach_reply);
+      audio = out.audio.toString("base64");
+      audioFormat = out.format;
+    } catch (ttsErr) {
+      console.warn("[turn/open] TTS failed → client will use browser voice:", ttsErr.message);
+    }
+  }
+
+  const persistedId = await persistOpening({ sessionId, seed, coachReply: result.coach_reply });
+
+  return res.json({
+    ...result,
+    audio,
+    audioFormat,
+    ttsProvider: currentTTSProvider(),
+    sessionId: persistedId,
+    seedProvider: seed?.provider ?? null,
+  });
+});
+
+/**
+ * Same rule persistTurn follows: a DB failure costs the row, never the turn.
+ * Returns null rather than echoing back an id it could not write to, so the
+ * client opens a fresh session next turn instead of retrying a dead one.
+ */
+async function persistOpening({ sessionId, seed, coachReply }) {
+  let id = sessionId ?? null;
+  try {
+    if (!id) id = (await startSession()).id;
+    await recordTurn({ sessionId: id, role: "coach", text: coachReply });
+    if (seed) await recordSeed(id, { provider: seed.provider, topicId: seed.topicId });
+    return id;
+  } catch (dbErr) {
+    console.warn("[turn/open] persistence failed, continuing:", dbErr.message);
+    return null;
   }
 }
 
