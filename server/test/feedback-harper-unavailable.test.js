@@ -76,4 +76,63 @@ describe("harper unavailable / fallback branches", () => {
     expect(fakeSpan.free).toHaveBeenCalledTimes(1);
     expect(fakeLint.free).toHaveBeenCalledTimes(1);
   });
+
+  it("filters out ASR-artefact lint kinds deterministically, freeing handles for the dropped ones too", async () => {
+    // Deterministic counterpart to the live-Harper "drops ... artefacts"
+    // test: that test depends on Harper actually emitting a Capitalization
+    // lint for its fixtures, so if a future Harper stops emitting it the
+    // assertion passes trivially without the filter ever running. Here the
+    // lint_kind values are fully controlled, so this proves the filter
+    // itself works -- against at least two different artefact kinds plus
+    // one real kind that must survive.
+    function makeFakeLint(kind, text) {
+      const span = { start: 0, end: text.length, free: vi.fn() };
+      const suggestion = { get_replacement_text: () => "", free: vi.fn() };
+      return {
+        span: () => span,
+        suggestions: () => [suggestion],
+        get_problem_text: () => text,
+        message: () => `${kind} problem`,
+        lint_kind: () => kind,
+        free: vi.fn(),
+        _span: span,
+        _suggestion: suggestion,
+      };
+    }
+
+    const capsLint = makeFakeLint("Capitalization", "she");
+    const punctLint = makeFakeLint("Punctuation", "friend");
+    const agreementLint = makeFakeLint("Agreement", "go");
+    const fakeLints = [capsLint, punctLint, agreementLint];
+
+    vi.doMock("harper.js", () => ({
+      LocalLinter: class {
+        async setup() {}
+        async lint() {
+          return fakeLints;
+        }
+      },
+      Dialect: { American: "American" },
+    }));
+    vi.doMock("harper.js/binaryInlined", () => ({ binaryInlined: {} }));
+
+    const { setupHarper, lintUtterance } = await import("../src/feedback/harper.js");
+
+    await setupHarper();
+    const findings = await lintUtterance("she go friend");
+
+    // Only the non-artefact lint survives the filter.
+    expect(findings).toHaveLength(1);
+    expect(findings[0].lintKind).toBe("Agreement");
+    expect(findings[0].original).toBe("go");
+
+    // Every lint -- including the two filtered out -- was still translated
+    // and its WASM handles freed. A handle dropped by the filter must not
+    // leak.
+    for (const lint of fakeLints) {
+      expect(lint.free).toHaveBeenCalledTimes(1);
+      expect(lint._span.free).toHaveBeenCalledTimes(1);
+      expect(lint._suggestion.free).toHaveBeenCalledTimes(1);
+    }
+  });
 });
