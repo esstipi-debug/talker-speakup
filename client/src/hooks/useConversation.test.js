@@ -9,6 +9,7 @@ vi.mock("../lib/api.js", () => ({
   postTurn: vi.fn(),
   postFeedback: vi.fn(),
   getHealth: vi.fn(),
+  postTurnOpen: vi.fn(),
 }));
 vi.mock("../lib/speech.js", async () => {
   const actual = await vi.importActual("../lib/speech.js");
@@ -51,7 +52,7 @@ vi.mock("../lib/micStream.js", () => ({
   isMicOpen: vi.fn(() => true),
 }));
 
-import { postTurn, postFeedback, getHealth } from "../lib/api.js";
+import { postTurn, postFeedback, getHealth, postTurnOpen } from "../lib/api.js";
 import { playAudio, speak, stopSpeaking } from "../lib/speech.js";
 import { useConversation } from "./useConversation.js";
 
@@ -60,6 +61,8 @@ beforeEach(() => {
   postTurn.mockReset();
   postFeedback.mockReset();
   postFeedback.mockResolvedValue(null);
+  postTurnOpen.mockReset();
+  postTurnOpen.mockResolvedValue(null);
   playAudio.mockClear();
   speak.mockClear();
   stopSpeaking.mockClear();
@@ -892,5 +895,45 @@ describe("useConversation — session id handling", () => {
     await waitFor(() => expect(postTurn).toHaveBeenCalledTimes(3));
     // Turn 2 came back with sessionId: null — the dead id must NOT still be "s1".
     expect(postTurn.mock.calls[2][0].sessionId).toBeNull();
+  });
+});
+
+describe("the coach opens the session", () => {
+  it("replaces the local greeting with the server's opening line", async () => {
+    postTurnOpen.mockResolvedValue({
+      coach_reply: "So — is a city better judged by its transport or its food?",
+      sessionId: "s1",
+      seedProvider: "local",
+    });
+
+    const { result } = renderHook(() => useConversation());
+    await waitFor(() => {
+      expect(result.current.messages[0].text).toContain("transport or its food");
+    });
+    expect(result.current.messages).toHaveLength(1);
+  });
+
+  it("keeps the local greeting when the server cannot be reached", async () => {
+    postTurnOpen.mockResolvedValue(null);
+
+    const { result } = renderHook(() => useConversation());
+    await waitFor(() => expect(postTurnOpen).toHaveBeenCalled());
+    expect(result.current.messages[0].text).toContain("SpeakUp coach");
+    expect(result.current.status).toBe("idle");
+  });
+
+  it("does not autoplay the opener", async () => {
+    postTurnOpen.mockResolvedValue({
+      coach_reply: "So — where do you land on it?",
+      audio: "AAAA",
+      audioFormat: "mp3",
+      sessionId: "s1",
+    });
+
+    const { result } = renderHook(() => useConversation());
+    await waitFor(() => expect(result.current.messages[0].text).toContain("where do you land"));
+    expect(playAudio).not.toHaveBeenCalled();
+    expect(speak).not.toHaveBeenCalled();
+    expect(result.current.status).toBe("idle");
   });
 });

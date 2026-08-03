@@ -47,6 +47,25 @@ export async function postTurnAudio({ blob, history }) {
 }
 
 /**
+ * The coach's opening turn. Returns null on ANY failure — a session that
+ * cannot reach the server must still open with the local greeting, so this
+ * never throws and never makes the caller handle an error path.
+ */
+export async function postTurnOpen({ sessionId }) {
+  try {
+    const res = await fetch("/turn/open", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId }),
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Deferred structured feedback. Never throws: a missing panel is a degraded
  * view, not a conversation error, and must not surface as one.
  */

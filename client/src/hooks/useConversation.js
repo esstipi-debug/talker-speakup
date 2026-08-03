@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { postTurn, postFeedback, getHealth } from "../lib/api.js";
+import { postTurn, postFeedback, getHealth, postTurnOpen } from "../lib/api.js";
 import {
   createRecognizer,
   isSTTSupported,
@@ -103,6 +103,28 @@ export function useConversation() {
     getHealth().then((h) => {
       if (h) setProviders({ brain: h.brain, tts: h.tts, stt: h.stt });
     });
+
+    // The coach speaks first. The local GREETING stays as the fallback rather
+    // than being deleted: no server, no key and no network must still produce
+    // an opening line.
+    //
+    // The opener is NOT played aloud. Browsers block audio without a user
+    // gesture, so autoplaying here fails silently on a cold load and works on
+    // a warm one — the worst kind of inconsistency. The audio rides along and
+    // the existing replay control plays it on demand.
+    let cancelled = false;
+    postTurnOpen({ sessionId: sessionIdRef.current }).then((opening) => {
+      if (cancelled || !opening?.coach_reply) return;
+      sessionIdRef.current = opening.sessionId ?? null;
+      setMessages([{
+        id: 0,
+        role: "coach",
+        text: opening.coach_reply,
+        audio: opening.audio,
+        audioFormat: opening.audioFormat,
+      }]);
+    });
+    return () => { cancelled = true; };
   }, []);
 
   // ---------------- playback controller ----------------
