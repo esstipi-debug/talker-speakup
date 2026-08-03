@@ -25,6 +25,22 @@ describe("lintUtterance", () => {
     }
   });
 
+  // ASR_ARTEFACT_KINDS is a denylist of exact strings. Nothing else in this
+  // suite would notice if Harper renamed its kinds in a version bump: the
+  // artefact test below asserts those names are ABSENT, and a renamed kind is
+  // absent too, so it would keep passing while the filter silently stopped
+  // filtering and recogniser noise started spending the learner's two
+  // correction slots.
+  //
+  // This is the canary. It pins one kind string the linter really emits, so a
+  // vocabulary change fails loudly here and points at the denylist. If it goes
+  // red after a Harper upgrade, re-derive ASR_ARTEFACT_KINDS before touching
+  // this assertion.
+  it("still emits the exact lint kind the artefact denylist is written against", async () => {
+    const findings = await lintUtterance("She go to school every day.");
+    expect(findings.map((f) => f.lintKind)).toContain("Agreement");
+  });
+
   it("returns an empty array for clean text", async () => {
     expect(await lintUtterance("I went to the shop yesterday.")).toEqual([]);
   });

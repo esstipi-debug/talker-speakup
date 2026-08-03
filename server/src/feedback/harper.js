@@ -1,5 +1,4 @@
 import { LocalLinter, Dialect } from "harper.js";
-import { binaryInlined } from "harper.js/binaryInlined";
 
 /**
  * The ONLY file allowed to import harper.js — same boundary micStream.js holds
@@ -7,7 +6,13 @@ import { binaryInlined } from "harper.js/binaryInlined";
  * module; they are translated to the project's Finding shape at the border.
  *
  * The binary is the inlined build: it carries the WASM as a data URL, so there
- * is no asset path to resolve and nothing for a bundler to lose.
+ * is no asset path to resolve and nothing for a bundler to lose. It is also
+ * ~21 MB of base64-in-JS, and `app.js` imports this module for the health pill
+ * — so a static import made every test file that touches `app.js` parse the
+ * whole blob (measured: 943 ms and +29 MB of heap to import `app.js` alone,
+ * in suites that never lint). It is loaded dynamically inside setupHarper()
+ * instead: still eagerly at boot, where index.js awaits it, but no longer on
+ * any path that merely wants harperStatus().
  */
 let linter = null;
 let status = "unavailable";
@@ -15,6 +20,7 @@ let status = "unavailable";
 export async function setupHarper() {
   if (linter) return;
   try {
+    const { binaryInlined } = await import("harper.js/binaryInlined");
     const candidate = new LocalLinter({ binary: binaryInlined, dialect: Dialect.American });
     // Load the WASM now, at boot — never lazily, or the learner's first turn
     // pays for it.
