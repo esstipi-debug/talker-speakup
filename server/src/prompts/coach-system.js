@@ -48,3 +48,34 @@ export function selectCoachPrompt() {
 export function activePromptLabel() {
   return process.env.COACH_PROMPT?.trim().toLowerCase() === "m1" ? "m1 (baseline)" : "m2";
 }
+
+/**
+ * The system prompt for the coach's FIRST turn, when the learner has not
+ * spoken yet.
+ *
+ * The topic is a SUBJECT, never an artefact: the coach discusses the thing
+ * itself and never mentions a video, a channel, or that anything is recent.
+ * That is what lets the same prompt work whether the topic came from a fixed
+ * rotation or from a feed the learner may not have watched — see the M8 spec's
+ * D2. It also means a stale topic is indistinguishable from a fresh one, which
+ * is why phase 2 needs no expiry logic at all.
+ *
+ * The topic is delimited because in phase 2 it is untrusted text lifted from a
+ * feed. Splicing it into the instruction text would let a title read as an
+ * instruction.
+ */
+export function buildOpeningPrompt(topic) {
+  return `${selectCoachPrompt()}
+
+THIS IS YOUR OPENING LINE. The learner has not said anything yet.
+
+Open by raising the subject inside the <topic> block below and asking for their opinion on it. Be concrete and specific — never "what would you like to talk about?", which hands the work back to them.
+
+NEVER assume the learner has seen, read, heard or watched anything. Do not mention a video, a channel, an article, or that the subject is recent or new. Discuss the subject itself.
+
+If they steer the conversation elsewhere, follow them. The topic is a starting point, not a rail.
+
+<topic>
+${topic}
+</topic>`;
+}
