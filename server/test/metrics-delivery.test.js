@@ -27,6 +27,12 @@ describe("computeDelivery — hesitation", () => {
     expect(computeDelivery({ text: clean, prosody: null }).hesitation.basis).toBe("text-only");
   });
 
+  it("stays steady with a 0-denominator per10w when the text has no words", () => {
+    const out = computeDelivery({ text: "", prosody: null });
+    expect(out.hesitation.band).toBe("steady");
+    expect(out.hesitation.fillers).toBe(0);
+  });
+
   it("escalates to effortful when mid-phrase pauses dominate", () => {
     const out = computeDelivery({
       text: "I wanted to go but",
@@ -39,6 +45,11 @@ describe("computeDelivery — hesitation", () => {
 describe("computeDelivery — sessionFluency", () => {
   it("is null below the phonation floor", () => {
     const out = computeDelivery({ text: clean, prosody: null, sessionPhonationMs: 4999, sessionSyllables: 20 });
+    expect(out.sessionFluency).toBeNull();
+  });
+
+  it("is null with zero syllables even when phonation is above the floor", () => {
+    const out = computeDelivery({ text: clean, prosody: null, sessionPhonationMs: 6000, sessionSyllables: 0 });
     expect(out.sessionFluency).toBeNull();
   });
 

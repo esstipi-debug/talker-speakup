@@ -32,4 +32,13 @@ describe("toPattern", () => {
     expect(toPattern("grammar", "")).toBe("grammar:");
     expect(toPattern("grammar", "!!!")).toBe("grammar:");
   });
+
+  it("treats null and undefined text as empty, via the nullish coalescing default", () => {
+    expect(toPattern("grammar", null)).toBe("grammar:");
+    expect(toPattern("grammar", undefined)).toBe("grammar:");
+  });
+
+  it("coerces numeric input to its string form", () => {
+    expect(toPattern("grammar", 30)).toBe("grammar:#");
+  });
 });

@@ -73,4 +73,32 @@ describe("requestUpgrades", () => {
     expect(prompt).toContain("a problem");
     expect(body.response_format).toEqual({ type: "json_object" });
   });
+
+  it("returns a valid correction in extraCorrections", async () => {
+    vi.stubGlobal("fetch", mockLLM({
+      upgrades: [],
+      corrections: [{ original: "I have a problem with my computer", suggestion: "issue", message: "More natural word choice." }],
+    }));
+    const out = await requestUpgrades({ utterance: UTTERANCE, history: [], harperFindings: [] });
+    expect(out.status).toBe("ok");
+    expect(out.extraCorrections).toEqual([
+      { original: "I have a problem with my computer", suggestion: "issue", message: "More natural word choice." },
+    ]);
+  });
+
+  it("DROPS a correction quoting text the learner never said", async () => {
+    vi.stubGlobal("fetch", mockLLM({
+      upgrades: [],
+      corrections: [{ original: "I got a issue with my laptop", suggestion: "issue", message: "..." }],
+    }));
+    const out = await requestUpgrades({ utterance: UTTERANCE, history: [], harperFindings: [] });
+    expect(out.status).toBe("ok");
+    expect(out.extraCorrections).toEqual([]);
+  });
+
+  it("fails closed without throwing when the network request itself rejects", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
+    const out = await requestUpgrades({ utterance: UTTERANCE, history: [], harperFindings: [] });
+    expect(out).toEqual({ status: "failed", upgrades: [], extraCorrections: [] });
+  });
 });

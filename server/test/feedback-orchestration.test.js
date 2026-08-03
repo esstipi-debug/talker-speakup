@@ -80,11 +80,37 @@ describe("buildFeedback", () => {
     expect(out.passes.mechanical).toBe("unavailable");
   });
 
-  it("survives a ledger failure", async () => {
+  it("survives a ledger write failure", async () => {
     lintUtterance.mockResolvedValue([finding("I have 30 years")]);
     recordFindings.mockRejectedValue(new Error("db down"));
     const out = await buildFeedback({ utterance: UTTERANCE });
     expect(out.corrections).toHaveLength(1);
+  });
+
+  it("falls back to discovery order when the ledger read rejects", async () => {
+    lintUtterance.mockResolvedValue([finding("the people is"), finding("I have 30 years")]);
+    getFrequencies.mockRejectedValue(new Error("db down"));
+    const out = await buildFeedback({ utterance: UTTERANCE });
+    expect(out.corrections).toHaveLength(2);
+    expect(out.corrections[0].original).toBe("the people is");
+  });
+
+  it("surfaces LLM extraCorrections with source llm and a recovered span", async () => {
+    lintUtterance.mockResolvedValue([]);
+    requestUpgrades.mockResolvedValue({
+      status: "ok",
+      upgrades: [],
+      extraCorrections: [{ original: "I make a party", suggestion: "throw a party", message: "collocation" }],
+    });
+    const out = await buildFeedback({ utterance: UTTERANCE });
+    expect(out.corrections).toHaveLength(1);
+    expect(out.corrections[0]).toMatchObject({
+      original: "I make a party",
+      suggestion: "throw a party",
+      message: "collocation",
+      source: "llm",
+      span: [UTTERANCE.indexOf("I make a party"), UTTERANCE.indexOf("I make a party") + "I make a party".length],
+    });
   });
 
   it("carries the hesitation block and a null sessionFluency below the floor", async () => {
