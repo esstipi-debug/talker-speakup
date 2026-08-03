@@ -156,6 +156,7 @@ you *acquired* get resurfaced too, not only errors you made.
 | **M5** | Custom scenarios — job interview, standup, doctor's visit, arguing with a landlord | planned |
 | **M6** | Fully offline — local Whisper STT (the `/turn/audio` path already exists, dormant) | planned |
 | **M7** | **Accent & prosody** — teaches rhythm, then measures it. Forced alignment (MFA) rather than wav2vec2/GOP, whose best published F1 for open-vocabulary phone-level error detection is 61–63% — a coin flip with authority | 🚧 slices 1–3 |
+| **M8** | **Sourced proactivity** — the coach opens on a subject worth arguing about. Phase 1 (a local topic rotation) shipped; phase 2 feeds it from RSS channels you choose | 🚧 phase 1 |
 
 **What M7 has actually shipped:** a silent-pause profile computed entirely in the browser (an import-free `AudioWorklet`, an adaptive floor, clause-boundary vs mid-phrase placement anchored on the recognizer's own endpoint decisions), a persistence spine, and a pronunciation provider factory with `none` as a first-class state. The Pronunciation Gym, the echo moment and the scoring sidecar are slices 4–8, gated on two spikes that have not run yet.
 
@@ -224,6 +225,7 @@ sees a string where it expects an object.
 |---|---|
 | `GET /health` | `{ status, brain, tts, stt, pron, feedback, ts }` — the UI renders these as live pills |
 | `POST /turn` | `{ utterance, history, sessionId?, prosody?, captureSettings? }` → `{ coach_reply, xp, audio?, audioFormat?, ttsProvider, sessionId, turnId }` — `turnId` is what `POST /feedback` attaches to |
+| `POST /turn/open` | `{ sessionId? }` → `{ coach_reply, xp, audio?, audioFormat?, ttsProvider, sessionId, seedProvider }` — the coach's first turn, before the learner has spoken |
 | `POST /turn/audio` | multipart `{ audio, history? }` → adds `transcript`. Returns `501` unless `STT_PROVIDER` is set |
 | `POST /feedback` | `{ utterance, turnId?, history?, prosody?, sessionPhonationMs?, sessionSyllables? }` → `{ corrections, upgrades, hesitation, sessionFluency, passes }` — deferred, per-turn structured feedback (M2), idempotent by `turnId`; persistence failing costs a row, never the response |
 
