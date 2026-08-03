@@ -6,6 +6,7 @@ import TranscriptReview from "./TranscriptReview.jsx";
 import MicButton from "./MicButton.jsx";
 import PauseNote from "./PauseNote.jsx";
 import StatHeader from "./StatHeader.jsx";
+import FeedbackPanel from "./FeedbackPanel.jsx";
 
 const vs = {
   status: "idle",
@@ -78,6 +79,25 @@ describe("accessibility", () => {
   it("StatHeader has no axe violations", async () => {
     const { container } = render(
       <StatHeader totalXp={240} turns={5} brain="mistral" tts="kokoro" stt="whisper" />,
+    );
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("FeedbackPanel has no violations", async () => {
+    const { container } = render(
+      <FeedbackPanel
+        feedback={{
+          corrections: [
+            { span: [0, 15], original: "I have 30 years", suggestion: "I'm 30", message: "Age takes 'be'.", kind: "grammar", pattern: "grammar:i have # years", source: "harper" },
+          ],
+          upgrades: [
+            { original: "I have a problem", upgraded: "my laptop's been acting up", why: "More idiomatic.", pattern: "vocab:i have a problem" },
+          ],
+          hesitation: { band: "some", basis: "audio", midPhrasePauses: 2, fillers: 1, selfRepairs: 0 },
+          sessionFluency: 72,
+          passes: { mechanical: "ok", pedagogical: "ok" },
+        }}
+      />
     );
     expect(await axe(container)).toHaveNoViolations();
   });
