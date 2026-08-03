@@ -66,8 +66,39 @@ learner keeps failing is the teaching act; the learner's response to that steeri
 evidence that would justify saying they have improved.
 
 The alternative — declaring a pattern resolved because it stopped appearing — is an inference from
-silence. A learner who has learned to avoid the perfect tense produces exactly the same signal as one
-who has mastered it. Elicitation separates them.
+silence. A learner who has learned to avoid a construction produces exactly the same signal as one who
+has mastered it. Elicitation separates them.
+
+### 3.2 What a "pattern" actually is, and why it limits everything here
+
+This is the constraint the rest of the spec is written against, and getting it wrong would make the
+milestone claim far more than it delivers.
+
+`pattern` is produced by `toPattern(type, text)`: lowercase, strip punctuation, fold digits to `#`,
+keep the **first four tokens**. So the ledger groups by *lexical opening*, not by grammatical
+category:
+
+| Learner says | Key | Same row? |
+|---|---|---|
+| "I have 30 years" | `grammar:i have # years` | — |
+| "I have 25 years" | `grammar:i have # years` | yes |
+| "my sister have 30 years" | `grammar:my sister have #` | **no** |
+
+**Consequences that must not be papered over:**
+
+- M4 cannot probe "the perfect tense" or "third-person -s". It can only probe *a specific four-token
+  opening the learner has repeated*. The directive given to the coach is therefore built from the
+  row's `example` and `explanation`, never from the key.
+- A learner who makes the same underlying error in a different lexical frame registers as a **pass**.
+  The pass is real — they did not repeat *that* construction — but it is narrower than "you have fixed
+  this error".
+- Combined with `MIN_PROBE_FREQUENCY`, this compounds: a pattern needs three sightings of the *same*
+  four-token opening before it is probeable at all. For a stock calque like *"I have # years"* that is
+  plausible; for most errors it may never happen.
+
+This is the single biggest risk to M4 delivering anything, and it is measurable early — see §11.
+Widening the key to group by grammatical category would need a classifier that does not exist in this
+project, which is exactly the kind of component §10 of the M2 spec refused to pretend it had.
 
 ---
 
@@ -99,6 +130,12 @@ it must be verifiable against constructed inputs with closed-form expectations.
 **`coach/probe.js` does no I/O either.** It receives already-read candidates plus the turn index and
 returns `{ pattern, directive } | null`. The *choice* is pure; the *read* lives in `repo/`. The
 throttle policy is therefore testable without a database.
+
+Candidates carry `{ pattern, example, explanation, frequency, status, lastProbedAt }`. The directive
+is built from **`example` and `explanation`**, never from `pattern` — the key is a mangled lexical
+prefix and would tell the model nothing (§3.2). The coach is shown the sentence the learner actually
+said and why it was wrong, and asked to create an opening where saying something like it would be
+natural.
 
 **`repo/ledger.js` remains the only module that talks to Prisma**, and now has three readers instead
 of one. It still does not catch its own errors — wrapping failures is the caller's job, as decided in
@@ -169,12 +206,24 @@ This is the same class of defect as attach-by-position in M2. It gets its own te
 say "this week" — there is no windowed count and inventing one would be a claim the data does not
 support.
 
+**It counts the current sighting.** M2 reads frequencies *before* writing them, so the raw value is
+the count as of the previous turn; the payload must report that value **plus one**. A learner told
+"you have said this 3 times" on the fourth occurrence would be quietly wrong every single time, and it
+is the kind of off-by-one nobody notices in review because both numbers look reasonable.
+
 ### 5.3 When a probe fires
 
 Server-side, no client state:
 
-- every `PROBE_TURN_INTERVAL` user turns in the session (default 3, **UNCALIBRATED**, mirroring
-  `PAUSE_NOTE_TURN_INTERVAL` in `useConversation.js`);
+- **the turn count comes from the database, not from the request.** `POST /turn` counts the user turns
+  already persisted for this `sessionId` *before* calling the brain, because the probe has to be
+  chosen before the reply is generated, and this turn's own row is not written until after. Call that
+  `turnsSoFar`. A probe fires when `turnsSoFar > 0 && turnsSoFar % PROBE_TURN_INTERVAL === 0` (default
+  3, **UNCALIBRATED**, mirroring `PAUSE_NOTE_TURN_INTERVAL` in `useConversation.js`). The `> 0` guard
+  matters: without it every brand-new session would probe on its first turn, before the learner has
+  said anything;
+- **no `sessionId`, or a count that fails, means no probe.** A fresh session cannot probe, which is
+  correct — there is no history in it yet;
 - among patterns with `status` of `active` or `improving` and `frequency >= MIN_PROBE_FREQUENCY`
   (default 3, **UNCALIBRATED**) — never on an isolated slip;
 - taking the top `PROBE_POOL_SIZE` (default 3, **UNCALIBRATED**) of those by frequency, and probing
@@ -269,7 +318,7 @@ Almost everything that matters here is pure, so almost everything is verified in
 | Module | Approach |
 |---|---|
 | `ledger/transitions.js` | Table-driven: all three rules, the exact boundary at the third pass, and the relapse path `resolved` → sighting → `active` with the counter zeroed |
-| `coach/probe.js` | Pure policy: fires on the interval, respects the cooldown, ignores low frequency, ignores `resolved`, returns `null` with no candidates |
+| `coach/probe.js` | Pure policy: fires on the interval and never on `turnsSoFar === 0`, rotates to the oldest-probed of the pool, ignores low frequency, ignores `resolved`, returns `null` with no candidates. Plus: the directive quotes `example`, never the `pattern` key |
 | `repo/ledger.js` | Candidate ordering and filtering; `applyProbeOutcome` persists; and a **regression test on `recordFindings`**, which M4 changes to reset status and counter |
 | `routes/turn.js` | The probe appears at the right cadence and is absent otherwise |
 | `routes/feedback.js` | The outcome transitions; **and the most important test in M4**: two requests with the same `turnId` and `probedPattern` apply the transition exactly once, asserted as `probesPassed` incremented by exactly 1 |
@@ -320,6 +369,9 @@ probes the learner was deliberately dodging. Recorded in
 
 - That a passed probe proves the learner used the construction correctly. It proves they did not make
   that mistake in that turn; they may have avoided the construction. §8.2.
+- That a passed probe means the underlying error is gone. The ledger groups by a four-token lexical
+  opening, so the same mistake in a different frame counts as a pass. Whatever the UI says, it must be
+  narrower than "you have fixed this error" — §3.2.
 - That the coach actually probed. The directive is an instruction to a model, not a guarantee.
 - That the thresholds mean anything yet. Every constant in this spec is **UNCALIBRATED** — see §11.
 - Anything about vocabulary retention. That is not in this milestone.
@@ -333,12 +385,23 @@ The ledger was empty when this was designed. `PROBE_TURN_INTERVAL`, `MIN_PROBE_F
 measured. Each ships as a named constant marked `UNCALIBRATED`, following the convention
 `PAUSE_NOTE_TURN_INTERVAL` established.
 
-They should be revisited once real sessions exist. The specific question worth answering first is
-whether probes fire often enough to move any status at all in a typical week: with a probe every three
-turns, a rotation pool of three patterns, and three passes required, a given pattern needs roughly
-nine turns per pass and about twenty-seven to resolve. A short daily session may never resolve
-anything — and if nothing ever resolves, the reward D4 exists to deliver never arrives, which would
-make D4 pointless rather than merely slow.
+They should be revisited once real sessions exist. Two questions, in this order, and the first one can
+be answered from the ledger alone before a line of M4 is written:
+
+**1. Does anything ever become probeable?** §3.2 means a pattern needs three sightings of the *same*
+four-token opening. Run a week of ordinary M2 sessions, then count rows with
+`frequency >= MIN_PROBE_FREQUENCY`. **If that count is zero or one, M4 as designed has nothing to
+work on** and the honest response is to widen the grouping — or to accept that only stock calques like
+*"I have # years"* are ever coached this way, and say so in the UI. This is cheap to check and it
+gates everything else in the milestone.
+
+**2. Does anything ever resolve?** With a probe every three turns, a rotation pool of three patterns
+and three passes required, a given pattern needs roughly nine turns per pass and about twenty-seven to
+resolve. A short daily session may never get there — and if nothing ever resolves, the reward D4
+exists to deliver never arrives, which makes D4 pointless rather than merely slow.
+
+Both are arithmetic against real rows, not opinions. Neither is answerable today because the ledger is
+empty, which is the whole reason they are written down instead of guessed at.
 
 ## 12. Deferred to the implementation plan
 
