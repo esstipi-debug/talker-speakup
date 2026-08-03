@@ -1,10 +1,12 @@
 import express from "express";
 import cors from "cors";
 import turnRouter from "./routes/turn.js";
+import feedbackRouter from "./routes/feedback.js";
 import { currentProvider } from "./brain/index.js";
 import { currentTTSProvider } from "./tts/index.js";
 import { currentSTTProvider } from "./stt/index.js";
 import { currentPronProvider } from "./pronunciation/index.js";
+import { harperStatus } from "./feedback/harper.js";
 
 /**
  * Builds the Express app but never listens — so tests can import it and bind
@@ -22,11 +24,13 @@ app.get("/health", (_req, res) => {
     tts: currentTTSProvider(),
     stt: currentSTTProvider(),
     pron: currentPronProvider(),
+    feedback: harperStatus(),
     ts: Date.now(),
   });
 });
 
 app.use("/turn", turnRouter);
+app.use("/feedback", feedbackRouter);
 
 // Fallback error handler so nothing crashes the single-user server.
 app.use((err, _req, res, _next) => {
