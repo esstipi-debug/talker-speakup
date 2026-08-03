@@ -1488,15 +1488,26 @@ Spec D3. Prompt-only, no new calls, no new latency.
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `coachSystemM2` — the exported name changes from `coachSystemM1`. `server/src/brain/mistral.js` imports it.
+- Produces: `coachSystemM1` (kept, frozen), `coachSystemM2` (new default), and
+  `selectCoachPrompt()` → the active prompt string, resolved from
+  `COACH_PROMPT` (`"m1" | "m2"`, default `"m2"`). `server/src/brain/mistral.js`
+  calls the selector rather than importing a constant.
+
+**Why the M1 prompt survives:** it is the only baseline against which "the
+pushier coach is actually better" can be checked, and that comparison cannot be
+made from a diff — it needs both prompts runnable. An unused export would be
+deleted as dead code on the next sweep, so it goes behind an env switch, the
+same way `brain`, `tts`, `stt` and `pron` already work.
 
 - [ ] **Step 1: Write the failing test**
 
 Create `server/test/coach-prompt.test.js`:
 
 ```js
-import { describe, it, expect } from "vitest";
-import { coachSystemM2 } from "../src/prompts/coach-system.js";
+import { describe, it, expect, afterEach } from "vitest";
+import { coachSystemM1, coachSystemM2, selectCoachPrompt } from "../src/prompts/coach-system.js";
+
+afterEach(() => { delete process.env.COACH_PROMPT; });
 
 describe("coach system prompt", () => {
   it("targets C1–C2", () => {
@@ -1518,6 +1529,28 @@ describe("coach system prompt", () => {
     }
   });
 });
+
+describe("selectCoachPrompt", () => {
+  it("defaults to M2", () => {
+    expect(selectCoachPrompt()).toBe(coachSystemM2);
+  });
+
+  it("returns the frozen M1 baseline when asked", () => {
+    process.env.COACH_PROMPT = "m1";
+    expect(selectCoachPrompt()).toBe(coachSystemM1);
+  });
+
+  it("falls back to M2 on an unknown value rather than throwing", () => {
+    process.env.COACH_PROMPT = "banana";
+    expect(selectCoachPrompt()).toBe(coachSystemM2);
+  });
+
+  it("keeps the M1 baseline byte-frozen", () => {
+    // If this ever needs updating, the baseline has stopped being a baseline.
+    expect(coachSystemM1).toContain("level C1–C2");
+    expect(coachSystemM1).toContain("Do NOT correct grammar yet");
+  });
+});
 ```
 
 - [ ] **Step 2: Run to verify it fails**
@@ -1530,9 +1563,20 @@ Expected: FAIL — `coachSystemM2` is not exported.
 
 - [ ] **Step 3: Implement**
 
-Replace the contents of `server/src/prompts/coach-system.js`:
+Replace the contents of `server/src/prompts/coach-system.js`. Keep the M1
+constant **exactly as it is today** — copy it, do not retype it, and do not
+"improve" it. Its whole value is being the unchanged baseline:
 
 ```js
+/**
+ * M1 system prompt — FROZEN BASELINE. Kept so the M2 pressure policy can be
+ * A/B'd against the prompt that shipped before it. Do not edit: the moment
+ * this changes, it stops being a baseline. Select it with COACH_PROMPT=m1.
+ */
+export const coachSystemM1 = `You are SpeakUp, a warm and encouraging English conversation coach for a Spanish-speaking adult (level C1–C2).
+Keep the conversation flowing naturally. Reply with ONE short, friendly turn — a question or a response — to keep them talking.
+Speak only in English. Do NOT correct grammar yet, and do NOT add notes, labels, or translations. Output only your spoken line.`;
+
 /**
  * M2 system prompt. Two jobs, both in the spoken line:
  *
@@ -1556,6 +1600,16 @@ KEEP THE PRESSURE ON:
 - Ask questions that cannot be answered with yes or no.
 
 Reply with ONE short spoken turn. Speak only in English. Do not correct their grammar, do not add notes, labels, or translations. Output only your spoken line.`;
+
+/**
+ * Resolved per call, not cached at module load, so flipping COACH_PROMPT and
+ * restarting is the whole workflow — and so the tests can set the env var
+ * without module mocking. Unknown values fall back to M2 rather than throwing:
+ * a typo in .env should not take the coach offline.
+ */
+export function selectCoachPrompt() {
+  return process.env.COACH_PROMPT?.trim().toLowerCase() === "m1" ? coachSystemM1 : coachSystemM2;
+}
 ```
 
 - [ ] **Step 4: Update the importer**
@@ -1563,26 +1617,35 @@ Reply with ONE short spoken turn. Speak only in English. Do not correct their gr
 In `server/src/brain/mistral.js`, change both the import and the usage:
 
 ```js
-import { coachSystemM2 } from "../prompts/coach-system.js";
+import { selectCoachPrompt } from "../prompts/coach-system.js";
 ```
 
 ```js
-      { role: "system", content: coachSystemM2 },
+      { role: "system", content: selectCoachPrompt() },
 ```
 
-- [ ] **Step 5: Run the tests**
+- [ ] **Step 5: Report it at boot**
+
+`server/src/index.js` already reports the active providers at startup. Add the
+prompt beside them so an A/B run cannot be misread later:
+
+```js
+console.log(`[brain] coach prompt = ${process.env.COACH_PROMPT?.trim().toLowerCase() === "m1" ? "m1 (baseline)" : "m2"}`);
+```
+
+- [ ] **Step 6: Run the tests**
 
 ```bash
 npm --prefix server test
 ```
 
-Expected: PASS. If any test still imports `coachSystemM1`, update it — the old name is gone.
+Expected: PASS, including the four `selectCoachPrompt` cases.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add server/src/prompts/coach-system.js server/src/brain/mistral.js server/test/coach-prompt.test.js
-git commit -m "feat(server): coach prompt pushes for elaboration at C1-C2"
+git add server/src/prompts/coach-system.js server/src/brain/mistral.js server/src/index.js server/test/coach-prompt.test.js
+git commit -m "feat(server): pushier C1-C2 coach prompt, with M1 kept as a switchable baseline"
 ```
 
 ---
@@ -2229,7 +2292,21 @@ In `README.md`:
 
 In `docs/superpowers/plans/voice-io-verification-checklist.md`, append the human-evaluation item from spec §9.4: 20 recorded utterances, judged by hand once, checking whether `upgrades` are genuinely C1 and whether Harper's recall on L2 Spanish-speaker English is acceptable. Note the documented fallback (`vennify/t5-base-grammar-correction`) if recall proves poor.
 
-In `server/.env.example`, document that `MISTRAL_API_KEY` now drives two passes per turn, and that without it corrections still work while upgrades do not.
+In `server/.env.example`, add:
+
+```bash
+# M2 runs TWO LLM calls per turn: the coach's reply and the upgrades pass.
+# Without a key, Harper still gives you real grammar corrections offline and
+# free — only the `upgrades` channel goes quiet.
+# MISTRAL_API_KEY=
+
+# Which coach system prompt to run. m2 (default) pushes for elaboration and
+# speaks C1-level English; m1 is the frozen pre-M2 baseline, kept so the two
+# can be compared on real conversation. See the M2 spec §3 D3.
+# COACH_PROMPT=m2
+```
+
+In `README.md`, add `COACH_PROMPT` to the provider/knob table alongside `brain`, `tts`, `stt` and `pron`.
 
 - [ ] **Step 6: Run everything**
 
