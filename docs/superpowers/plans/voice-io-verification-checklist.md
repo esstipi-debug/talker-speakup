@@ -58,3 +58,26 @@ rate.
 - [ ] If Harper's recall on L2 Spanish-speaker English proves poor, the documented fallback is adding
       `vennify/t5-base-grammar-correction` as a third pass — a follow-up decision, not part of M2, and
       not to be pre-committed without this evaluation's evidence.
+
+## M2 → M4 handover notes
+
+Things the M2 reviews surfaced that only matter once M4 starts reading the ledger. Recorded here
+because the execution scratch directory is git-ignored and dies with the branch.
+
+- **Read `ErrorLedger.type` for rendering; never parse the `pattern` prefix.** Correction keys are
+  always built as `grammar:…` regardless of which pass found the error — deliberately, so one habit
+  cannot split across two rows depending on whether Harper or the LLM caught it. `type` still carries
+  the display family, so a row can legitimately read `pattern: "grammar:…"` with `type: "vocab"`.
+- **Ledger rows written before 2026-08-03 may be keyed `vocab:` or `register:`.** The key rule changed
+  in the final M2 fix wave. Single-user local app, so no migration was written; a stale row simply
+  never matches again and ages out of relevance.
+- **`Turn.fluency` is now written** — the session-level pace value current at that turn, `Int?`,
+  0–100, absent (not zero) below the 5 s phonation floor. It is an internally-defined index with no
+  external calibration: use it for within-learner trend only, never as a score to compare or display
+  as a number.
+- **`Turn.confidence` is still never written.** M2 redefined that signal as a hesitation index and
+  ships it inside the `feedback` JSON blob, not in the column. Do not assume the column means
+  anything.
+- **Weak spot in the current tests:** the two "leaves fluency null" cases cannot distinguish "left
+  untouched" from "wrote null", since the column defaults to null. If M4 ever updates a turn row more
+  than once, pre-set the column and re-assert.
