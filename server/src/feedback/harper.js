@@ -31,13 +31,25 @@ export function harperStatus() {
   return status;
 }
 
+/**
+ * Lint kinds that are artefacts of the pipeline, not of the learner.
+ *
+ * The transcript's capitalization and punctuation are authored by the speech
+ * recogniser, so flagging them corrects the ASR engine and spends one of the
+ * learner's two correction slots on noise. Measured on Harper 2.7.0: two of
+ * its five hits across a 12-sentence Spanish-speaker sample were
+ * Capitalization. Spelling and Typo go for the same reason — you cannot
+ * misspell out loud.
+ */
+const ASR_ARTEFACT_KINDS = new Set(["Capitalization", "Punctuation", "Formatting", "Spelling", "Typo"]);
+
 export async function lintUtterance(text) {
   if (!linter) return [];
   // language:'plaintext' is mandatory. Harper defaults to markdown, which
   // would parse spoken '#' and '*' as markup.
   const lints = await linter.lint(text, { language: "plaintext", dedup: true });
   try {
-    return lints.map((lint) => translate(lint));
+    return lints.map((lint) => translate(lint)).filter((f) => !ASR_ARTEFACT_KINDS.has(f.lintKind));
   } finally {
     // Lints are WASM handles. This process is long-lived.
     for (const lint of lints) lint.free();

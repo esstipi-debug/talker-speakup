@@ -34,4 +34,16 @@ describe("lintUtterance", () => {
     const findings = await lintUtterance("I paid # 5 for it * twice");
     for (const f of findings) expect(f.lintKind).not.toBe("Formatting");
   });
+
+  // The recogniser writes the capitalization, not the learner. Both of these
+  // yield a Capitalization lint on Harper 2.7.0 (measured). Assert on the
+  // KINDS that survive, never on emptiness: if Harper later starts catching
+  // the real errors in these sentences, this test must keep passing.
+  it("drops lint kinds that are artefacts of the recogniser, not the learner", async () => {
+    const artefacts = ["Capitalization", "Punctuation", "Formatting", "Spelling", "Typo"];
+    for (const text of ["yesterday I go to the cinema with my friend", "there is many peoples in the street"]) {
+      const kinds = (await lintUtterance(text)).map((f) => f.lintKind);
+      expect(kinds.filter((k) => artefacts.includes(k))).toEqual([]);
+    }
+  });
 });
