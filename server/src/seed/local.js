@@ -38,6 +38,15 @@ export function pickOpener(n) {
   };
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * A real daily rotation: the day number changes once every 24h, so
+ * consecutive sessions on the same day draw the same opener and walk the
+ * list in order day over day. `pickOpener(Date.now())` would have re-rolled
+ * on every millisecond instead — independent draws with a 1-in-OPENERS.length
+ * chance of repeating back to back, which is not a rotation at all.
+ */
 export async function nextSeed() {
-  return pickOpener(Date.now());
+  return pickOpener(Math.floor(Date.now() / DAY_MS));
 }
