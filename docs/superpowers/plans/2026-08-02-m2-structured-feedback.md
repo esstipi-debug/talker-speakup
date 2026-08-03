@@ -599,9 +599,13 @@ Create `server/src/metrics/delivery.js`:
  * inputs with closed-form expectations (spec §6).
  */
 
-/** Spoken hesitation markers. Multi-word forms first so they win the match. */
+/**
+ * Spoken hesitation markers. "I mean" is deliberately NOT here — it is a
+ * repair marker and lives in SELF_REPAIRS. Listing it in both would
+ * double-count the same three words against the learner.
+ */
 const FILLERS = [
-  /\byou know\b/gi, /\bi mean\b/gi, /\bsort of\b/gi, /\bkind of\b/gi,
+  /\byou know\b/gi, /\bsort of\b/gi, /\bkind of\b/gi,
   /\bum+\b/gi, /\buh+\b/gi, /\ber+\b/gi, /\bhmm+\b/gi, /\blike\b/gi,
 ];
 /** Explicit self-repair markers — the learner audibly restarting. */
@@ -674,7 +678,7 @@ function articulationScore(phonationMs, syllables) {
 npm --prefix server test -- metrics-delivery
 ```
 
-Expected: PASS. If the filler count is off, check that `/\bi mean\b/` is counted once in `FILLERS` and once in `SELF_REPAIRS` — that is deliberate: "I mean" is both a filler and a repair marker.
+Expected: PASS. If `fillers` comes out as 4 rather than 3, `/\bi mean\b/` has been left in `FILLERS` as well as `SELF_REPAIRS` — it belongs only in the latter.
 
 - [ ] **Step 5: Commit**
 
