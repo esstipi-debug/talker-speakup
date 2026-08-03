@@ -84,4 +84,26 @@ describe("buildOpeningPrompt", () => {
       delete process.env.COACH_PROMPT;
     }
   });
+
+  describe("with no topic (seed chain failed, or a phase 2 provider returned nothing)", () => {
+    it("never interpolates the literal string \"null\" into the prompt", () => {
+      const built = buildOpeningPrompt(null);
+      expect(built).not.toContain("null");
+    });
+
+    it("emits no <topic> block at all", () => {
+      const built = buildOpeningPrompt(null);
+      expect(built).not.toContain("<topic>");
+      expect(built).not.toContain("</topic>");
+    });
+
+    it("still asks for a concrete opening question of its own", () => {
+      const built = buildOpeningPrompt(null).toLowerCase();
+      expect(built).toContain("ask");
+    });
+
+    it("still carries the active coach prompt", () => {
+      expect(buildOpeningPrompt(null)).toContain("YOUR ENGLISH IS THE LESSON");
+    });
+  });
 });

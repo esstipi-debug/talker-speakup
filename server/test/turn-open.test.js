@@ -61,5 +61,8 @@ describe("POST /turn/open", () => {
     expect(status).toBe(200);
     expect(body.coach_reply.length).toBeGreaterThan(0);
     expect(body.sessionId).toBeNull();
+    // Fix 5: no session id means nothing was persisted, so there is no seed
+    // stamp to back a provenance claim — the response must not claim one.
+    expect(body.seedProvider).toBeNull();
   });
 });

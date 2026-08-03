@@ -151,33 +151,53 @@ router.post("/open", async (req, res) => {
     }
   }
 
-  const persistedId = await persistOpening({ sessionId, seed, coachReply: result.coach_reply });
+  const persisted = await persistOpening({ sessionId, seed, coachReply: result.coach_reply });
 
   return res.json({
     ...result,
     audio,
     audioFormat,
     ttsProvider: currentTTSProvider(),
-    sessionId: persistedId,
-    seedProvider: seed?.provider ?? null,
+    sessionId: persisted.sessionId,
+    // Honesty of measurement: report the provenance we actually managed to
+    // stamp, not the in-memory seed we merely picked. If recordSeed never
+    // landed (persistence failed outright, or it threw after the opener turn
+    // itself was written), there is no stamp for later comparison to read —
+    // the response must not claim one exists.
+    seedProvider: persisted.seedProvider,
   });
 });
 
 /**
  * Same rule persistTurn follows: a DB failure costs the row, never the turn.
- * Returns null rather than echoing back an id it could not write to, so the
- * client opens a fresh session next turn instead of retrying a dead one.
+ * Mirrors persistTurn's sessionUsable handling exactly: once recordTurn (the
+ * opener turn itself) has landed, the session id is worth handing back even
+ * if recordSeed then fails — otherwise a session that already holds the
+ * opener turn gets dropped and orphaned for no reason.
+ *
+ * seedProvider in the returned object reflects whether recordSeed actually
+ * persisted, not merely whether a seed was picked in memory — see the
+ * seedProvider comment at the call site.
  */
 async function persistOpening({ sessionId, seed, coachReply }) {
   let id = sessionId ?? null;
+  let sessionUsable = false;
+  let seedPersisted = false;
   try {
     if (!id) id = (await startSession()).id;
     await recordTurn({ sessionId: id, role: "coach", text: coachReply });
-    if (seed) await recordSeed(id, { provider: seed.provider, topicId: seed.topicId });
-    return id;
+    sessionUsable = true; // a write to this session has now succeeded
+    if (seed) {
+      await recordSeed(id, { provider: seed.provider, topicId: seed.topicId });
+      seedPersisted = true;
+    }
+    return { sessionId: id, seedProvider: seedPersisted ? seed.provider : null };
   } catch (dbErr) {
     console.warn("[turn/open] persistence failed, continuing:", dbErr.message);
-    return null;
+    return {
+      sessionId: sessionUsable ? id : null,
+      seedProvider: seedPersisted ? seed.provider : null,
+    };
   }
 }
 
