@@ -15,6 +15,25 @@ const BAND_COPY = {
   effortful: "Effortful delivery",
 };
 
+/** "1 filler" vs "2 fillers" — no dependency needed for a single plural rule. */
+function pluralize(count, singular) {
+  return `${count} ${singular}${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * Builds the visible hesitation detail string, e.g.
+ * "3 mid-phrase pauses, 2 fillers, 1 self-repair". Zero counts are omitted
+ * entirely — a learner who did not hesitate should not see a list of zeroes.
+ * Returns "" when all three counts are zero.
+ */
+function hesitationDetail(hesitation) {
+  const parts = [];
+  if (hesitation.midPhrasePauses > 0) parts.push(pluralize(hesitation.midPhrasePauses, "mid-phrase pause"));
+  if (hesitation.fillers > 0) parts.push(pluralize(hesitation.fillers, "filler"));
+  if (hesitation.selfRepairs > 0) parts.push(pluralize(hesitation.selfRepairs, "self-repair"));
+  return parts.join(", ");
+}
+
 export default function FeedbackPanel({ feedback }) {
   if (!feedback) return null;
   const { corrections = [], upgrades = [], hesitation, passes } = feedback;
@@ -49,8 +68,9 @@ export default function FeedbackPanel({ feedback }) {
 
       <div className="flex flex-wrap items-center gap-2 mt-2 text-[11px] text-muted">
         {hesitation && (
-          <span title={`${hesitation.midPhrasePauses} mid-phrase pauses · ${hesitation.fillers} fillers · ${hesitation.selfRepairs} self-repairs`}>
+          <span>
             {BAND_COPY[hesitation.band]}
+            {hesitationDetail(hesitation) && ` · ${hesitationDetail(hesitation)}`}
           </span>
         )}
         {hesitation?.basis === "text-only" && <span>· measured from typed text only</span>}
