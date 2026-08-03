@@ -8,6 +8,12 @@
  *
  * The hesitation band is NEVER labelled "confidence": it measures pausing and
  * self-repair, and the copy says only what the signal supports.
+ *
+ * Each correction also carries a `span` that this component intentionally does
+ * NOT read: it is offsets into the utterance, carried end-to-end for a future
+ * in-transcript highlighting feature. It is the reason /feedback must receive
+ * the byte-identical utterance /turn got — do not delete it as "unused" without
+ * also retiring that invariant.
  */
 const BAND_COPY = {
   steady: "Steady delivery",

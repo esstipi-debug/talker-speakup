@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll } from "vitest";
-import { startSession, recordTurn, getSessionWithTurns } from "../src/repo/session.js";
+import { startSession, recordTurn, getSessionWithTurns, saveTurnFeedback, getTurnFeedback } from "../src/repo/session.js";
 import { getPrisma } from "../src/db.js";
 
 afterAll(() => getPrisma().$disconnect());
@@ -49,6 +49,27 @@ describe("session repo", () => {
     await recordTurn({ sessionId: s.id, role: "coach", text: "sure" });
     const loaded = await getSessionWithTurns(s.id);
     expect(loaded.turns[0].captureSettings).toBeNull();
+  });
+
+  // Spec §6.2: the turn carries the SESSION-level fluency current at that turn
+  // so the trend stays queryable for M4 without inventing a per-turn metric.
+  it("writes the session fluency onto the turn when there is one", async () => {
+    const s = await startSession();
+    const t = await recordTurn({ sessionId: s.id, role: "user", text: "hello" });
+    await saveTurnFeedback(t.id, { corrections: [], sessionFluency: 82 }, 82);
+
+    const loaded = await getSessionWithTurns(s.id);
+    expect(loaded.turns[0].fluency).toBe(82);
+    expect(await getTurnFeedback(t.id)).toMatchObject({ sessionFluency: 82 });
+  });
+
+  it("leaves fluency null when there is none — 'not yet measurable' is not a score of 0", async () => {
+    const s = await startSession();
+    const t = await recordTurn({ sessionId: s.id, role: "user", text: "hello" });
+    await saveTurnFeedback(t.id, { corrections: [], sessionFluency: null }, null);
+
+    const loaded = await getSessionWithTurns(s.id);
+    expect(loaded.turns[0].fluency).toBeNull();
   });
 
   it("survives one unreadable capture-settings row instead of failing the whole session read", async () => {

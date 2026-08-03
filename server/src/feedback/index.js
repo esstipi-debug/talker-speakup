@@ -46,7 +46,17 @@ export async function buildFeedback({ utterance, history = [], prosody = null, s
       kind: "register",
       source: "llm",
     })),
-  ].map((c) => ({ ...c, pattern: toPattern(c.kind, c.original) }));
+  ]
+    // A correction with no replacement renders as an arrow pointing at nothing
+    // and costs one of the two rationed slots. Harper can legitimately produce
+    // one (a lint with no suggestion); it carries no teaching value, so it is
+    // dropped here — before the cap, so a useful finding takes the slot.
+    .filter((c) => String(c.suggestion ?? "").trim())
+    // The ledger KEY is deliberately decoupled from the pass that found the
+    // mistake. "I have 30 years" is the same habit whether Harper flags it or
+    // the LLM does; keying it by the finding pass would file one habit under
+    // two rows and split its frequency. `kind` stays the display/type field.
+    .map((c) => ({ ...c, pattern: toPattern("grammar", c.original) }));
 
   const upgrades = llm.upgrades.map((u) => ({ ...u, pattern: toPattern("vocab", u.original) }));
 
@@ -55,18 +65,27 @@ export async function buildFeedback({ utterance, history = [], prosody = null, s
   corrections.sort(byFrequency);
   upgrades.sort(byFrequency);
 
+  // toPattern keeps only the first few tokens, so two distinct findings in one
+  // utterance can normalize to the same key. Left alone they would be upserted
+  // twice in one batch — frequency +2 for a single turn, the exact inflation
+  // the turnId idempotency gate exists to prevent — and render with duplicate
+  // React keys. De-duplicating here, after the frequency sort and before both
+  // the write and the cap, fixes all of it in one place.
+  const uniqueCorrections = dedupeByPattern(corrections);
+  const uniqueUpgrades = dedupeByPattern(upgrades);
+
   // Everything found is written, including what the cap hides. The cap limits
   // what the learner sees, not what the system knows.
   await safeRecord([
-    ...corrections.map((c) => ({ pattern: c.pattern, type: c.kind, example: c.original, explanation: c.message })),
-    ...upgrades.map((u) => ({ pattern: u.pattern, type: "vocab", example: u.original, explanation: u.why })),
+    ...uniqueCorrections.map((c) => ({ pattern: c.pattern, type: c.kind, example: c.original, explanation: c.message })),
+    ...uniqueUpgrades.map((u) => ({ pattern: u.pattern, type: "vocab", example: u.original, explanation: u.why })),
   ]);
 
   const { hesitation, sessionFluency } = computeDelivery({ text: utterance, prosody, sessionPhonationMs, sessionSyllables });
 
   return {
-    corrections: corrections.slice(0, MAX_CORRECTIONS),
-    upgrades: upgrades.slice(0, MAX_UPGRADES),
+    corrections: uniqueCorrections.slice(0, MAX_CORRECTIONS),
+    upgrades: uniqueUpgrades.slice(0, MAX_UPGRADES),
     hesitation,
     sessionFluency,
     passes: { mechanical, pedagogical: llm.status },
@@ -85,6 +104,16 @@ function kindFor(lintKind) {
   if (VOCAB_KINDS.has(lintKind)) return "vocab";
   if (REGISTER_KINDS.has(lintKind)) return "register";
   return "grammar";
+}
+
+/** First occurrence wins — the list is already ordered by what matters most. */
+function dedupeByPattern(items) {
+  const seen = new Set();
+  return items.filter((x) => {
+    if (seen.has(x.pattern)) return false;
+    seen.add(x.pattern);
+    return true;
+  });
 }
 
 /** The LLM pass has no offsets; recover them from the verified quote. */

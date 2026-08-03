@@ -47,10 +47,12 @@ async function runTurn(utterance, history) {
  * body: { utterance: string, history?: { role: "coach"|"user", text: string }[],
  *         sessionId?: string, prosody?: object, captureSettings?: object }
  * resp: { coach_reply: string, xp: number, audio?: base64, audioFormat?: string,
- *         ttsProvider: string, sessionId: string|null }
+ *         ttsProvider: string, sessionId: string|null, turnId: string|null }
  *
- * M1 scope: the brain returns the next coach line + basic XP.
- * Structured feedback (corrections, fluency, confidence) arrives in M2.
+ * The brain returns the next coach line + basic XP. `turnId` identifies the
+ * persisted user row: POST /feedback attaches this turn's structured feedback
+ * (M2) to it, and keys its idempotency by it. It is null when the row could
+ * not be written.
  *
  * The turn is persisted (Session/Turn) as a side effect — see persistTurn below.
  * A DB failure there never fails the request; it only costs the row.

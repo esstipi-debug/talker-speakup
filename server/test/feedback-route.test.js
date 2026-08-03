@@ -95,6 +95,52 @@ describe("POST /feedback", () => {
     expect(res.status).toBe(502);
   });
 
+  // The seam the two tests above leave open: the failure case deliberately has
+  // no turnId, so the in-flight map is never touched. With one, the map's
+  // `.finally()` builds a SECOND promise off `work` — and `.finally()` adopts
+  // the original's rejection. Only `work` itself is awaited under try/catch, so
+  // without a `.catch` on the derived chain a rejecting build is an unhandled
+  // rejection, which under Node's default policy kills the process mid-session.
+  it("502s without an unhandled rejection when the build fails for a turn already in flight", async () => {
+    const turnId = await makeTurn("I have 30 years");
+    buildFeedback.mockRejectedValue(new Error("everything is on fire"));
+
+    const unhandled = [];
+    const onUnhandled = (reason) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const res = await request(app).post("/feedback").send({ utterance: "I have 30 years", turnId });
+      expect(res.status).toBe(502);
+      // Node reports unhandled rejections at the end of a macrotask, not
+      // synchronously — give it a couple of turns of the loop to fire.
+      for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  it("stores the session fluency on the turn alongside the payload", async () => {
+    const turnId = await makeTurn("I have 30 years");
+    buildFeedback.mockResolvedValue({ ...PAYLOAD, sessionFluency: 74 });
+    const res = await request(app).post("/feedback").send({ utterance: "I have 30 years", turnId });
+    expect(res.status).toBe(200);
+
+    const { getPrisma } = await import("../src/db.js");
+    const turn = await getPrisma().turn.findUnique({ where: { id: turnId } });
+    expect(turn.fluency).toBe(74);
+  });
+
+  it("leaves the fluency column null when the session has too little phonation to score", async () => {
+    const turnId = await makeTurn("I have 30 years");
+    const res = await request(app).post("/feedback").send({ utterance: "I have 30 years", turnId });
+    expect(res.status).toBe(200);
+
+    const { getPrisma } = await import("../src/db.js");
+    const turn = await getPrisma().turn.findUnique({ where: { id: turnId } });
+    expect(turn.fluency).toBeNull();
+  });
+
   it("reports the mechanical pass in /health", async () => {
     const res = await request(app).get("/health");
     expect(["ok", "unavailable"]).toContain(res.body.feedback);

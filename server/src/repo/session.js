@@ -24,11 +24,15 @@ export async function recordTurn({ sessionId, role, text, xp = null, prosody = n
   });
 }
 
-export async function saveTurnFeedback(turnId, payload) {
-  await getPrisma().turn.update({
-    where: { id: turnId },
-    data: { feedback: JSON.stringify(payload) },
-  });
+/**
+ * `fluency` is the SESSION-level score current at this turn (spec §6.2), not a
+ * per-turn metric. A non-numeric value leaves the column exactly as it was —
+ * "not enough phonation yet" must not be recorded as a score of 0.
+ */
+export async function saveTurnFeedback(turnId, payload, fluency = null) {
+  const data = { feedback: JSON.stringify(payload) };
+  if (typeof fluency === "number" && Number.isFinite(fluency)) data.fluency = Math.round(fluency);
+  await getPrisma().turn.update({ where: { id: turnId }, data });
 }
 
 export async function getTurnFeedback(turnId) {

@@ -831,6 +831,39 @@ describe("useConversation — pause profile", () => {
     await waitFor(() => expect(postFeedback).toHaveBeenCalledTimes(1));
     expect(postFeedback.mock.calls[0][0].sessionPhonationMs).toBe(0);
   });
+
+  // Numerator and denominator of the session articulation rate must come from
+  // exactly the same turns. Phonation only accumulates on spoken turns, so
+  // counting syllables from every turn would make one typed message inflate the
+  // rate without inflating the time — the pace meter clamps to 0 and stays
+  // contaminated for the rest of the session. The text path is first-class
+  // here, so that is a normal session, not an edge case.
+  it("counts syllables from spoken turns only, so a typed turn cannot poison the pace meter", async () => {
+    mic.getFrames.mockReturnValue(buildFrames([[3000, -20]]));
+    let t = 0;
+    mic.micNowMs.mockImplementation(() => (t += 3000));
+
+    postTurn.mockResolvedValue({ coach_reply: "ok", xp: 1, sessionId: "s1", turnId: "t1" });
+    postFeedback.mockResolvedValue(null);
+
+    const { result } = await mountedProsody();
+
+    // Turn 1: spoken.
+    await act(async () => { result.current.startListening(); });
+    act(() => recHandlers.onResult("banana")); // 3 vowel groups: a-a-a
+    await act(async () => { result.current.stopListening(); }); // -> review
+    await act(async () => { result.current.send(); });
+    await waitFor(() => expect(postFeedback).toHaveBeenCalledTimes(1));
+    const spokenSyllables = postFeedback.mock.calls[0][0].sessionSyllables;
+    expect(spokenSyllables).toBe(3);
+
+    // Turn 2: typed. It carries no phonation, so it must contribute no
+    // syllables either — the count sent is unchanged from turn 1.
+    await waitFor(() => expect(result.current.status).toBe("idle"));
+    await act(async () => { await result.current.submitText("elephantine oratorio umbrella academia"); });
+    await waitFor(() => expect(postFeedback).toHaveBeenCalledTimes(2));
+    expect(postFeedback.mock.calls[1][0].sessionSyllables).toBe(spokenSyllables);
+  });
 });
 
 describe("useConversation — session id handling", () => {

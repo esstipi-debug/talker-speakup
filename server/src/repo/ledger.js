@@ -18,6 +18,11 @@ export async function getFrequencies(patterns) {
   return new Map(rows.map((r) => [r.pattern, r.frequency]));
 }
 
+/**
+ * `entries` must already be unique by `pattern` — buildFeedback de-duplicates
+ * before calling. Two entries sharing a key here would increment the same row
+ * twice for a single turn, which is not something this function can detect.
+ */
 export async function recordFindings(entries) {
   for (const { pattern, type, example, explanation } of entries) {
     await getPrisma().errorLedger.upsert({

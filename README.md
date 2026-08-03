@@ -10,7 +10,7 @@ You talk. It listens, answers out loud, and — milestone by milestone — start
 ![status](https://img.shields.io/badge/status-M2%20shipped%20·%20M7%20in%20progress-8b6cff?style=flat-square)
 ![local first](https://img.shields.io/badge/local--first-no%20account%2C%20no%20cloud-2ee6a6?style=flat-square)
 ![stack](https://img.shields.io/badge/React%2019%20·%20Express%205%20·%20Prisma-15101f?style=flat-square)
-![tests](https://img.shields.io/badge/tests-273%20passing-ffb35c?style=flat-square)
+![tests](https://img.shields.io/badge/tests-281%20passing-ffb35c?style=flat-square)
 
 </div>
 
@@ -89,7 +89,7 @@ So the order is deliberate:
 | Pass | Tool | Job | Cost |
 |---|---|---|---|
 | 1. Mechanical | [Harper](https://github.com/Automattic/harper) — rule-based, local, sub-millisecond | Deterministic, no hallucinations, no API call. | $0 |
-| 2. Pedagogical | LLM (`brain/`) | *Why* it's wrong, and what a C1 speaker would have said instead. Register, collocation, naturalness. | 1 call/turn |
+| 2. Pedagogical | LLM (`feedback/upgrades.js` — deliberately *not* built on `brain/`: same provider and key, different contract) | *Why* it's wrong, and what a C1 speaker would have said instead. Register, collocation, naturalness. | 1 call/turn |
 
 **Measured, not assumed** (Harper 2.7.0 against a 12-sentence L1-Spanish sample, 2026-08-02): Harper
 catches bare subject–verb disagreement (*"She go to school"*, *"he don't like"*) and some collocation
@@ -223,7 +223,7 @@ sees a string where it expects an object.
 | | |
 |---|---|
 | `GET /health` | `{ status, brain, tts, stt, pron, feedback, ts }` — the UI renders these as live pills |
-| `POST /turn` | `{ utterance, history, sessionId?, prosody?, captureSettings? }` → `{ coach_reply, xp, audio?, audioFormat?, ttsProvider, sessionId }` |
+| `POST /turn` | `{ utterance, history, sessionId?, prosody?, captureSettings? }` → `{ coach_reply, xp, audio?, audioFormat?, ttsProvider, sessionId, turnId }` — `turnId` is what `POST /feedback` attaches to |
 | `POST /turn/audio` | multipart `{ audio, history? }` → adds `transcript`. Returns `501` unless `STT_PROVIDER` is set |
 | `POST /feedback` | `{ utterance, turnId?, history?, prosody?, sessionPhonationMs?, sessionSyllables? }` → `{ corrections, upgrades, hesitation, sessionFluency, passes }` — deferred, per-turn structured feedback (M2), idempotent by `turnId`; persistence failing costs a row, never the response |
 
@@ -264,7 +264,7 @@ docker run -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-cpu
 
 ## Tests
 
-**273 tests** — 182 on the client (Vitest + Testing Library + jsdom) and 91 on the server (Vitest, node
+**281 tests** — 183 on the client (Vitest + Testing Library + jsdom) and 98 on the server (Vitest, node
 environment, binding port 0 so they never collide with a running dev server). Coverage is gated at 80%
 on four metrics for the files where the bodies are buried: `useConversation.js`, `speech.js`,
 `micStream.js`, `lib/prosody/**` on the client, and `server/src/feedback/**` + `server/src/metrics/**`

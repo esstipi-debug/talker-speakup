@@ -292,8 +292,9 @@ most wins the slot), written on completion.
 A client retry would inflate `frequency` and teach the ledger that the learner fails more than they do.
 
 **Guard:** `/feedback` is keyed by `turnId`. If that turn already has persisted feedback, the stored
-payload is returned without recomputation. This makes the endpoint idempotent and yields caching for
-free — a page reload does not pay for the LLM call again.
+payload is returned without recomputation. This makes the endpoint idempotent against retries and
+races. It is *not* a reload cache: client turn ids live in memory only, so a reloaded page has no id
+left to ask about and can never reach this gate.
 
 ### 7.3 Persistence failure
 

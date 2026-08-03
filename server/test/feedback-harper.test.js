@@ -29,11 +29,11 @@ describe("lintUtterance", () => {
     expect(await lintUtterance("I went to the shop yesterday.")).toEqual([]);
   });
 
-  it("does not treat the utterance as markdown", async () => {
-    // Bare '#' and '*' are ordinary speech artefacts, not headings/emphasis.
-    const findings = await lintUtterance("I paid # 5 for it * twice");
-    for (const f of findings) expect(f.lintKind).not.toBe("Formatting");
-  });
+  // There was a "does not treat the utterance as markdown" case here asserting
+  // no finding came back with lintKind "Formatting". It was unfalsifiable:
+  // ASR_ARTEFACT_KINDS drops Formatting at the boundary, so the assertion held
+  // whatever Harper did with '#' and '*'. The real behaviour — that those kinds
+  // never escape lintUtterance — is covered by the artefact-filter test below.
 
   // The recogniser writes the capitalization, not the learner. Both of these
   // yield a Capitalization lint on Harper 2.7.0 (measured). Assert on the

@@ -40,10 +40,8 @@ function toWireHistory(messages) {
 }
 
 /** Cheap vowel-group syllable estimate — the session rate needs a count, not a phonetician. */
-function countSyllables(messages) {
-  return messages
-    .filter((m) => m.role === "user")
-    .reduce((n, m) => n + (m.text.toLowerCase().match(/[aeiouy]+/g)?.length ?? 0), 0);
+function countSyllables(text) {
+  return text.toLowerCase().match(/[aeiouy]+/g)?.length ?? 0;
 }
 
 /**
@@ -80,7 +78,13 @@ export function useConversation() {
   // idempotency by turnId. Different keys for different jobs: the client's id
   // exists before the server has replied.
   const nextMsgIdRef = useRef(1);
+  // Numerator and denominator of the session articulation rate. Both must be
+  // sourced from EXACTLY the same set of turns: phonation only exists for
+  // spoken turns, so counting syllables from every turn (typed ones included)
+  // would inflate the rate without inflating the time and collapse the pace
+  // meter to zero for the rest of the session.
   const sessionPhonationRef = useRef(0);
+  const sessionSpokenSyllablesRef = useRef(0);
 
   const statusRef = useRef("idle");
   const draftRef = useRef("");
@@ -166,6 +170,9 @@ export function useConversation() {
           unknown: prev.unknown + prosody.unknown,
         }));
         sessionPhonationRef.current += prosody.phonationMs ?? 0;
+        // Same block, same turn: the syllables that the phonation above was
+        // measured over. See the ref declarations.
+        sessionSpokenSyllablesRef.current += countSyllables(utterance);
       }
       setMessages((prev) => [...prev, { id: nextMsgIdRef.current++, role: "coach", text: coach_reply, audio, audioFormat }]);
       if (typeof xp === "number") setTotalXp((v) => v + xp);
@@ -202,11 +209,10 @@ export function useConversation() {
       history: toWireHistory(historyBefore),
       prosody,
       sessionPhonationMs: sessionPhonationRef.current,
-      // Read from the values already in scope, not messagesRef: the ref is
-      // only updated by an effect, so it can lag behind and drop the
-      // just-sent utterance if this resolves within the same microtask
-      // sweep as the state update.
-      sessionSyllables: countSyllables([...historyBefore, userMsg]),
+      // Spoken turns only, matching the phonation above — both refs are
+      // accumulated in the same `if (prosody)` block in runTurn, which has
+      // already run by the time this is called.
+      sessionSyllables: sessionSpokenSyllablesRef.current,
     });
     if (!payload) return; // degraded view, not an error — never touch `error`
 

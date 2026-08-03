@@ -18,7 +18,7 @@ const inFlight = new Map();
 
 /**
  * POST /feedback
- * body: { utterance, turnId?, sessionId?, history?, prosody?,
+ * body: { utterance, turnId?, history?, prosody?,
  *         sessionPhonationMs?, sessionSyllables? }
  *
  * Deferred, per-turn structured feedback (spec D1/D7). The coach has already
@@ -35,9 +35,10 @@ router.post("/", async (req, res) => {
   }
 
   // Idempotency (spec §7.2): a retry must not inflate ledger frequencies.
-  // Also yields caching for free — a reload does not re-pay the LLM call.
   // This is the database gate: it catches duplicates separated in time,
-  // including across a server restart.
+  // including across a server restart. It is NOT a reload cache — client
+  // turnIds live in memory only, so a reloaded page never asks about a turn
+  // it could still identify.
   if (turnId) {
     const stored = await getTurnFeedback(turnId).catch(() => null);
     if (stored) return res.json(stored);
@@ -56,7 +57,10 @@ router.post("/", async (req, res) => {
     // since M3.
     if (turnId) {
       try {
-        await saveTurnFeedback(turnId, payload);
+        // spec §6.2: the turn also carries the session-level fluency current
+        // at that turn, so M4 can query the trend without a per-turn metric.
+        // A null value leaves the column untouched rather than writing 0.
+        await saveTurnFeedback(turnId, payload, payload?.sessionFluency);
       } catch (dbErr) {
         console.warn("[feedback] persistence failed, continuing:", dbErr.message);
       }
@@ -73,7 +77,12 @@ router.post("/", async (req, res) => {
     work = computeAndPersist();
     if (turnId) {
       inFlight.set(turnId, work);
-      work.finally(() => inFlight.delete(turnId));
+      // `.finally()` returns a NEW promise that adopts the original's
+      // rejection. `work` itself is awaited under try/catch below, but this
+      // derived promise has no handler of its own — without the `.catch`, a
+      // rejecting buildFeedback becomes an unhandled rejection and takes the
+      // process down under Node's default policy.
+      work.catch(() => {}).finally(() => inFlight.delete(turnId));
     }
   }
 
