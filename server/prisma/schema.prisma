@@ -33,6 +33,10 @@ model Turn {
   // JSON-encoded track.getSettings() snapshot (spec §4.1) — the comparability
   // key for any prosody measurement. Same string-not-Json rationale as prosody.
   captureSettings String?
+  // JSON-encoded M2 feedback payload. String rather than Json for the same
+  // reason as prosody: the SQLite connector's Json capability stays out of the
+  // migration path.
+  feedback   String?
   createdAt  DateTime @default(now())
 }
 

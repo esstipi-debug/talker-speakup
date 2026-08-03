@@ -66,8 +66,8 @@ router.post("/", async (req, res) => {
     const result = await runTurn(utterance.trim(), history);
     // Persistence must never break the loop: a DB failure costs us a row,
     // not the learner's turn.
-    const persistedId = await persistTurn({ sessionId, utterance: utterance.trim(), prosody, captureSettings, result });
-    return res.json({ ...result, sessionId: persistedId });
+    const { sessionId: persistedId, turnId } = await persistTurn({ sessionId, utterance: utterance.trim(), prosody, captureSettings, result });
+    return res.json({ ...result, sessionId: persistedId, turnId });
   } catch (err) {
     console.error("[turn] brain error:", err);
     return res.status(502).json({
@@ -80,25 +80,29 @@ router.post("/", async (req, res) => {
 async function persistTurn({ sessionId, utterance, prosody, captureSettings, result }) {
   let id = sessionId ?? null;
   let sessionUsable = false;
+  let turnId = null;
   try {
     if (!id) id = (await startSession()).id;
-    await recordTurn({
+    const userTurn = await recordTurn({
       sessionId: id,
       role: "user",
       text: utterance,
       prosody: prosody ?? null,
       captureSettings: captureSettings ?? null,
     });
+    turnId = userTurn.id;
     sessionUsable = true; // a write to this session has now succeeded
     await recordTurn({ sessionId: id, role: "coach", text: result.coach_reply, xp: result.xp ?? null });
-    return id;
+    return { sessionId: id, turnId };
   } catch (dbErr) {
     console.warn("[turn] persistence failed, continuing:", dbErr.message);
-    // Never hand back an id we could not write to. The client re-adopts
+    // Never hand back a session id we could not write to. The client re-adopts
     // whatever comes back, so echoing an unusable id would make every later
     // turn fail the same way, silently and forever. Returning null makes the
     // next turn open a fresh session instead.
-    return sessionUsable ? id : null;
+    // turnId is echoed when the user row itself landed: /feedback can still
+    // attach to it even if the coach row failed.
+    return { sessionId: sessionUsable ? id : null, turnId };
   }
 }
 

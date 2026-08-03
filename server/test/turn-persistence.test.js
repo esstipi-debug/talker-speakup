@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import request from "supertest";
 import { app } from "../src/app.js";
-import { getSessionWithTurns } from "../src/repo/session.js";
+import { getSessionWithTurns, saveTurnFeedback, getTurnFeedback } from "../src/repo/session.js";
 import { getPrisma } from "../src/db.js";
 
 let server;
@@ -81,5 +82,25 @@ describe("POST /turn persistence", () => {
     const first = await turn({ utterance: "one" });
     const second = await turn({ utterance: "two", sessionId: first.body.sessionId });
     expect(second.body.sessionId).toBe(first.body.sessionId);
+  });
+});
+
+describe("turn id + feedback column", () => {
+  it("returns a turnId for the user turn", async () => {
+    const res = await request(app).post("/turn").send({ utterance: "hello there" });
+    expect(res.status).toBe(200);
+    expect(typeof res.body.turnId).toBe("string");
+    expect(res.body.turnId.length).toBeGreaterThan(0);
+  });
+
+  it("round-trips a feedback payload on that turn", async () => {
+    const res = await request(app).post("/turn").send({ utterance: "hello again" });
+    await saveTurnFeedback(res.body.turnId, { corrections: [], upgrades: [] });
+    expect(await getTurnFeedback(res.body.turnId)).toEqual({ corrections: [], upgrades: [] });
+  });
+
+  it("returns null for a turn with no feedback yet", async () => {
+    const res = await request(app).post("/turn").send({ utterance: "nothing stored" });
+    expect(await getTurnFeedback(res.body.turnId)).toBeNull();
   });
 });

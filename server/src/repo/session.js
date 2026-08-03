@@ -10,7 +10,7 @@ export async function startSession() {
   return getPrisma().session.create({ data: {} });
 }
 
-export async function recordTurn({ sessionId, role, text, xp = null, prosody = null, captureSettings = null }) {
+export async function recordTurn({ sessionId, role, text, xp = null, prosody = null, captureSettings = null, feedback = null }) {
   return getPrisma().turn.create({
     data: {
       sessionId,
@@ -19,8 +19,24 @@ export async function recordTurn({ sessionId, role, text, xp = null, prosody = n
       xp,
       prosody: prosody ? JSON.stringify(prosody) : null,
       captureSettings: captureSettings ? JSON.stringify(captureSettings) : null,
+      feedback: feedback ? JSON.stringify(feedback) : null,
     },
   });
+}
+
+export async function saveTurnFeedback(turnId, payload) {
+  await getPrisma().turn.update({
+    where: { id: turnId },
+    data: { feedback: JSON.stringify(payload) },
+  });
+}
+
+export async function getTurnFeedback(turnId) {
+  const turn = await getPrisma().turn.findUnique({
+    where: { id: turnId },
+    select: { feedback: true },
+  });
+  return parseJsonColumn(turn?.feedback, "feedback");
 }
 
 export async function getSessionWithTurns(id) {
@@ -37,6 +53,7 @@ function decodeTurn(turn) {
     ...turn,
     prosody: parseJsonColumn(turn.prosody, "prosody"),
     captureSettings: parseJsonColumn(turn.captureSettings, "captureSettings"),
+    feedback: parseJsonColumn(turn.feedback, "feedback"),
   };
 }
 
