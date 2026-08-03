@@ -15,4 +15,5 @@ app.listen(PORT, () => {
   console.log(
     `[server] SpeakUp API → http://localhost:${PORT}  (brain: ${currentProvider()}, voice: ${currentTTSProvider()}, stt: ${currentSTTProvider()}, pron: ${currentPronProvider()})`,
   );
+  console.log(`[brain] coach prompt = ${process.env.COACH_PROMPT?.trim().toLowerCase() === "m1" ? "m1 (baseline)" : "m2"}`);
 });

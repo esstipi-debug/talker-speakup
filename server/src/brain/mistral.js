@@ -1,5 +1,5 @@
 import { basicXp } from "./scoring.js";
-import { coachSystemM1 } from "../prompts/coach-system.js";
+import { selectCoachPrompt } from "../prompts/coach-system.js";
 
 const MISTRAL_BASE = "https://api.mistral.ai/v1";
 
@@ -16,7 +16,7 @@ export class MistralBrain {
 
   async evaluateTurn({ userUtterance, history = [] }) {
     const messages = [
-      { role: "system", content: coachSystemM1 },
+      { role: "system", content: selectCoachPrompt() },
       ...history.map((m) => ({
         role: m.role === "coach" ? "assistant" : "user",
         content: m.text,
