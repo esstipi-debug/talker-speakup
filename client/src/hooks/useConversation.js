@@ -71,6 +71,19 @@ export function useConversation() {
   const currentAudioRef = useRef(null);
   const speakTimerRef = useRef(null);
   const sessionIdRef = useRef(null);
+  // Guards the opener POST to at most one per mounted hook instance. Refs
+  // survive React StrictMode's dev-only mount -> cleanup -> mount replay (the
+  // fiber isn't torn down, only effects are re-run), so the second effect
+  // invocation sees this already true and skips issuing a second request —
+  // see the comment on the mount effect below for why that request would
+  // otherwise be a live, server-committing POST rather than a harmless GET.
+  const openRequestedRef = useRef(false);
+  // True whenever the hook is "really" mounted right now. Set true at the top
+  // of every effect invocation (including StrictMode's replay) and false in
+  // the cleanup; a genuine unmount leaves it false because no further mount
+  // follows, while StrictMode's synchronous replay flips it back to true
+  // before the still-pending opener request's promise can resolve.
+  const isMountedRef = useRef(true);
   const lastTurnProsodyRef = useRef(null);
   const turnIndexRef = useRef(0); // counts completed recordings, for pause-note throttling
   const lastNoteTurnRef = useRef(-Infinity); // turnIndexRef value when a note was last shown
@@ -112,19 +125,47 @@ export function useConversation() {
     // gesture, so autoplaying here fails silently on a cold load and works on
     // a warm one — the worst kind of inconsistency. The audio rides along and
     // the existing replay control plays it on demand.
-    let cancelled = false;
-    postTurnOpen({ sessionId: sessionIdRef.current }).then((opening) => {
-      if (cancelled || !opening?.coach_reply) return;
-      sessionIdRef.current = opening.sessionId ?? null;
-      setMessages([{
-        id: 0,
-        role: "coach",
-        text: opening.coach_reply,
-        audio: opening.audio,
-        audioFormat: opening.audioFormat,
-      }]);
-    });
-    return () => { cancelled = true; };
+    //
+    // StrictMode note: unlike the mic capture this effect sits beside
+    // (opened only from an event handler, per the comment in main.jsx), this
+    // is a side-effectful POST fired from the effect itself. Without a guard,
+    // React's dev-only double-invoke would fire it twice, and both requests
+    // are already committed server-side (a Session row, a persisted opener
+    // turn, a recordSeed stamp, and — with a real API key — a live Mistral
+    // completion and Kokoro synthesis) well before either response comes
+    // back to be discarded. openRequestedRef makes the request idempotent
+    // per mount; isMountedRef still guards against applying a response after
+    // a REAL unmount.
+    isMountedRef.current = true;
+    if (!openRequestedRef.current) {
+      openRequestedRef.current = true;
+      postTurnOpen({ sessionId: sessionIdRef.current }).then((opening) => {
+        if (!isMountedRef.current || !opening?.coach_reply) return;
+        // The opener may only replace the transcript if the learner hasn't
+        // already acted while it was in flight. A slow opener racing a fast
+        // learner reply would otherwise wipe out a turn already sent to the
+        // server: `setMessages([...])` below replaces the WHOLE array, and
+        // status leaves "idle" the instant runTurn starts, so "still idle
+        // with only the original greeting" is the one safe window to apply
+        // the opener's own greeting into.
+        if (messagesRef.current.length === 1 && statusRef.current === "idle") {
+          setMessages([{
+            id: 0,
+            role: "coach",
+            text: opening.coach_reply,
+            audio: opening.audio,
+            audioFormat: opening.audioFormat,
+          }]);
+        }
+        // Never steal a sessionId the learner's own turn already claimed —
+        // once runTurn has set one, the opener's session (which holds only
+        // the coach's opening turn, never the learner's) must not overwrite it.
+        if (!sessionIdRef.current) {
+          sessionIdRef.current = opening.sessionId ?? null;
+        }
+      });
+    }
+    return () => { isMountedRef.current = false; };
   }, []);
 
   // ---------------- playback controller ----------------
