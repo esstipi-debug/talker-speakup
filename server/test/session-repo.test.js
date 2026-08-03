@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll } from "vitest";
-import { startSession, recordTurn, getSessionWithTurns, saveTurnFeedback, getTurnFeedback } from "../src/repo/session.js";
+import { startSession, recordTurn, getSessionWithTurns, saveTurnFeedback, getTurnFeedback, recordSeed } from "../src/repo/session.js";
 import { getPrisma } from "../src/db.js";
 
 afterAll(() => getPrisma().$disconnect());
@@ -96,5 +96,32 @@ describe("session repo", () => {
     expect(loaded.turns[0].prosody).toEqual({ total: 1, internal: 1, boundary: 0, unknown: 0 });
     expect(loaded.turns[1].prosody).toBeNull(); // the bad row degrades, alone
     expect(loaded.turns[2].text).toBe("third"); // and the rows after it still arrive
+  });
+});
+
+describe("seed provenance", () => {
+  it("records which provider opened the session", async () => {
+    const session = await startSession();
+    await recordSeed(session.id, { provider: "local", topicId: null });
+
+    const stored = await getSessionWithTurns(session.id);
+    expect(stored.seedProvider).toBe("local");
+    expect(stored.topicId).toBeNull();
+  });
+
+  it("records the topic id when the provider had one", async () => {
+    const session = await startSession();
+    await recordSeed(session.id, { provider: "feeds", topicId: "item-42" });
+
+    const stored = await getSessionWithTurns(session.id);
+    expect(stored.seedProvider).toBe("feeds");
+    expect(stored.topicId).toBe("item-42");
+  });
+
+  it("leaves both columns null on a session that was never seeded", async () => {
+    const session = await startSession();
+    const stored = await getSessionWithTurns(session.id);
+    expect(stored.seedProvider).toBeNull();
+    expect(stored.topicId).toBeNull();
   });
 });

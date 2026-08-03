@@ -14,6 +14,13 @@ model Session {
   startedAt  DateTime  @default(now())
   endedAt    DateTime?
   summary    String?
+  // Which seed provider opened this session, and the id of the item that
+  // supplied the topic (null for providers that have no item, like `local`).
+  // This is the measurement hook: without it there is no way to compare a
+  // sourced session against an unsourced one, which is the whole reason M8
+  // was sequenced after M2.
+  seedProvider String?
+  topicId      String?
   turns      Turn[]
 }
 

@@ -10,6 +10,18 @@ export async function startSession() {
   return getPrisma().session.create({ data: {} });
 }
 
+/**
+ * Stamps a session with the provenance of its opening topic. Separate from
+ * startSession because the session exists before the seed is chosen: /turn/open
+ * may adopt a session the client already had.
+ */
+export async function recordSeed(sessionId, { provider, topicId = null }) {
+  await getPrisma().session.update({
+    where: { id: sessionId },
+    data: { seedProvider: provider, topicId },
+  });
+}
+
 export async function recordTurn({ sessionId, role, text, xp = null, prosody = null, captureSettings = null, feedback = null }) {
   return getPrisma().turn.create({
     data: {
