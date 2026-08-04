@@ -71,6 +71,11 @@ export function useConversation() {
   const currentAudioRef = useRef(null);
   const speakTimerRef = useRef(null);
   const sessionIdRef = useRef(null);
+  // The probe token carried between /turn and the NEXT /feedback call (spec
+  // D6, §5.1). Not component state — nothing renders from it, and threading
+  // it through a re-render would risk exactly the read-before-overwrite bug
+  // §5.1 warns about.
+  const pendingProbeRef = useRef(null);
   // Guards the opener POST to at most one per mounted hook instance. Refs
   // survive React StrictMode's dev-only mount -> cleanup -> mount replay (the
   // fiber isn't torn down, only effects are re-run), so the second effect
@@ -211,7 +216,7 @@ export function useConversation() {
     const prosody = lastTurnProsodyRef.current;
     const captureSettings = getCaptureSettings();
     try {
-      const { coach_reply, xp, audio, audioFormat, sessionId, turnId } = await postTurn({
+      const { coach_reply, xp, audio, audioFormat, sessionId, turnId, probe } = await postTurn({
         utterance,
         history: toWireHistory([...historyBefore, userMsg]),
         sessionId: sessionIdRef.current,
@@ -245,12 +250,18 @@ export function useConversation() {
       else if (audio) setTtsFallbackActive(false);
       playCoach(coach_reply, audio, audioFormat);
 
+      // M4 §5.1: read the PENDING probe (from the PREVIOUS turn) before
+      // overwriting the ref with this turn's own probe — reversing this
+      // order would silently drop the previous turn's probe outcome.
+      const probedPattern = pendingProbeRef.current;
+      pendingProbeRef.current = probe?.pattern ?? null;
+
       // Deferred feedback (spec D1): fire and forget. The panel fills in on an
       // already-rendered message; nothing here is allowed to block the voice.
       // The trailing .catch is defence in depth — postFeedback already
       // swallows its own errors, but the call site must not depend on that
       // upstream contract to stay safe from an unhandled rejection.
-      requestFeedback({ utterance, turnId, historyBefore, userMsg, prosody }).catch(() => {});
+      requestFeedback({ utterance, turnId, historyBefore, userMsg, prosody, probedPattern }).catch(() => {});
     } catch (err) {
       // Roll back by identity, not by snapshot: `historyBefore` was captured
       // before this turn started, so restoring it wholesale would also wipe
@@ -265,7 +276,7 @@ export function useConversation() {
     }
   }
 
-  async function requestFeedback({ utterance, turnId, historyBefore, userMsg, prosody }) {
+  async function requestFeedback({ utterance, turnId, historyBefore, userMsg, prosody, probedPattern }) {
     const payload = await postFeedback({
       utterance,
       turnId,
@@ -276,6 +287,7 @@ export function useConversation() {
       // accumulated in the same `if (prosody)` block in runTurn, which has
       // already run by the time this is called.
       sessionSyllables: sessionSpokenSyllablesRef.current,
+      probedPattern,
     });
     if (!payload) return; // degraded view, not an error — never touch `error`
 
