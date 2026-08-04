@@ -10,7 +10,7 @@ You talk. It listens, answers out loud, and — milestone by milestone — start
 ![status](https://img.shields.io/badge/status-M2%20shipped%20·%20M7%20in%20progress-8b6cff?style=flat-square)
 ![local first](https://img.shields.io/badge/local--first-no%20account%2C%20no%20server%20lock--in-2ee6a6?style=flat-square)
 ![stack](https://img.shields.io/badge/React%2019%20·%20Express%205%20·%20Prisma-15101f?style=flat-square)
-![tests](https://img.shields.io/badge/tests-338%20passing-ffb35c?style=flat-square)
+![tests](https://img.shields.io/badge/tests-398%20passing-ffb35c?style=flat-square)
 
 </div>
 
@@ -155,7 +155,8 @@ you *acquired* get resurfaced too, not only errors you made.
 | **M1.5** | **Voice I/O hardening** — `useConversation` state machine, live interim transcript, review/edit before send, barge-in, status + error banners, 93 tests, axe-clean | ✅ shipped `2026-07-24` |
 | **M2** | Structured feedback — Harper + LLM, `corrections` + `upgrades`, session fluency + hesitation meters, coach prompt recalibrated to **C1–C2** | ✅ shipped `2026-08-02` |
 | **M3** | Persistence — the schema stops being decorative and starts getting written to | ✅ shipped `2026-07-27` |
-| **M4** | Error ledger + vocab spaced repetition | ⏭️ next |
+| **M4** | **Error ledger exploitation** — the coach periodically steers toward a construction the learner keeps failing, and a read-only patterns view shows which habits are changing on evidence, not on silence | ✅ shipped |
+| **M4.5** | Vocabulary spaced repetition (`VocabItem`, SM-2) — deliberately deferred out of M4 (spec D1) | planned |
 | **M5** | Custom scenarios — job interview, standup, doctor's visit, arguing with a landlord | planned |
 | **M6** | Fully offline — local Whisper STT (the `/turn/audio` path already exists, dormant) | planned |
 | **M7** | **Accent & prosody** — teaches rhythm, then measures it. Forced alignment (MFA) rather than wav2vec2/GOP, whose best published F1 for open-vocabulary phone-level error detection is 61–63% — a coin flip with authority | 🚧 slices 1–3 |
@@ -196,6 +197,8 @@ speakup/
         ├── stt/          voicebox | none     (server-side path, dormant until M6)
         ├── pronunciation/ local | mock | none  (sidecar arrives in slice 3)
         ├── seed/         feeds | local        → the coach's opening topic (M8)
+        ├── coach/        probe.js             → which recurring mistake to elicit next (M4)
+        ├── ledger/       transitions.js       → the ErrorLedger status state machine (M4)
         ├── feedback/     Harper (mechanical) + LLM (pedagogical) → corrections + upgrades (M2)
         ├── metrics/      hesitation (per turn) + session fluency — internal indices, no external calibration
         └── prompts/      the coach's personality lives here — not in the weights; m1 | m2 via COACH_PROMPT
@@ -230,9 +233,10 @@ sees a string where it expects an object.
 |---|---|
 | `GET /health` | `{ status, brain, tts, stt, pron, feedback, ts }` — the UI renders these as live pills |
 | `POST /turn` | `{ utterance, history, sessionId?, prosody?, captureSettings? }` → `{ coach_reply, xp, audio?, audioFormat?, ttsProvider, sessionId, turnId }` — `turnId` is what `POST /feedback` attaches to |
+| `GET /patterns` | → `{ patterns: [{ example, frequency, status, probesPassed, lastSeenAt, lastProbedAt }] }` — read-only (M4); a pattern's `status` reflects deliberate elicitation outcomes, not silence — see the design spec's §10 for what can and cannot be honestly claimed from it |
 | `POST /turn/open` | `{ sessionId? }` → `{ coach_reply, xp, audio?, audioFormat?, ttsProvider, sessionId, seedProvider }` — the coach's first turn, before the learner has spoken |
 | `POST /turn/audio` | multipart `{ audio, history? }` → adds `transcript`. Returns `501` unless `STT_PROVIDER` is set |
-| `POST /feedback` | `{ utterance, turnId?, history?, prosody?, sessionPhonationMs?, sessionSyllables? }` → `{ corrections, upgrades, hesitation, sessionFluency, passes }` — deferred, per-turn structured feedback (M2), idempotent by `turnId`; persistence failing costs a row, never the response |
+| `POST /feedback` | `{ utterance, turnId?, history?, prosody?, sessionPhonationMs?, sessionSyllables?, probedPattern? }` → `{ corrections, upgrades, hesitation, sessionFluency, passes, probeResult }` — deferred, per-turn structured feedback (M2) plus M4's probe-outcome resolution, idempotent by `turnId`; persistence failing costs a row, never the response |
 
 `sessionId` comes back `null` when the server could not write to the one it was given — that is the
 signal to start a fresh session, not to retry a dead one. Persistence failing costs a row, never the
