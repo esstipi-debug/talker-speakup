@@ -52,8 +52,11 @@ describe("coach/probe — chooseProbe", () => {
       candidate({ pattern: "p:1", frequency: 10, lastProbedAt: "2026-08-01T00:00:00Z" }),
       candidate({ pattern: "p:2", frequency: 9, lastProbedAt: "2026-07-01T00:00:00Z" }), // oldest in pool
       candidate({ pattern: "p:3", frequency: 8, lastProbedAt: "2026-08-02T00:00:00Z" }),
-      // Outside the pool (pool size 3): highest frequency here would win if pooling were broken.
-      candidate({ pattern: "p:4", frequency: 100, lastProbedAt: "2026-01-01T00:00:00Z" }),
+      // Outside the pool (pool size 3): its frequency is below the other three, so proper
+      // top-N-by-frequency pooling excludes it despite it having the oldest lastProbedAt —
+      // a broken implementation that skipped pooling and just picked oldest-overall would
+      // wrongly pick this one instead.
+      candidate({ pattern: "p:4", frequency: 5, lastProbedAt: "2026-01-01T00:00:00Z" }),
     ];
     expect(candidates.length).toBeGreaterThan(PROBE_POOL_SIZE);
     const result = chooseProbe({ candidates, turnsSoFar: PROBE_TURN_INTERVAL });

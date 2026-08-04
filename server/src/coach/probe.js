@@ -27,7 +27,7 @@ export function chooseProbe({ candidates, turnsSoFar }) {
 
   const pool = candidates
     .filter((c) => (c.status === "active" || c.status === "improving") && c.frequency >= MIN_PROBE_FREQUENCY)
-    .sort((a, b) => a.frequency - b.frequency)
+    .sort((a, b) => b.frequency - a.frequency)
     .slice(0, PROBE_POOL_SIZE);
   if (!pool.length) return null;
 
