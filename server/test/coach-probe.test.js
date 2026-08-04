@@ -86,4 +86,13 @@ describe("coach/probe — chooseProbe", () => {
     const result = chooseProbe({ candidates: [candidate()], turnsSoFar: PROBE_TURN_INTERVAL });
     expect(result.directive.toLowerCase()).not.toContain("this is a test");
   });
+
+  it("frames a vocab-type (upgrade) candidate as reinforcement, never as a mistake", () => {
+    const result = chooseProbe({
+      candidates: [candidate({ type: "vocab", example: "I have a problem", explanation: "More idiomatic exists." })],
+      turnsSoFar: PROBE_TURN_INTERVAL,
+    });
+    expect(result.directive.toLowerCase()).not.toContain("mistake");
+    expect(result.directive).toContain("I have a problem");
+  });
 });

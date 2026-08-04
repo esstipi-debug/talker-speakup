@@ -53,10 +53,29 @@ describe("PatternsPanel", () => {
     await waitFor(() => expect(screen.getByText(/keep talking/i)).toBeInTheDocument());
   });
 
-  it("shows an empty state when the fetch fails too, never an error message", async () => {
+  it("shows its own error state when the fetch fails, distinct from the empty state", async () => {
     getPatterns.mockResolvedValue(null);
     render(<PatternsPanel open={true} />);
-    await waitFor(() => expect(screen.getByText(/keep talking/i)).toBeInTheDocument());
-    expect(screen.queryByText(/error/i)).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/couldn't load/i)).toBeInTheDocument());
+    expect(screen.queryByText(/keep talking/i)).not.toBeInTheDocument();
+  });
+
+  it("frames an upgrade (vocab type) as reinforcement, never as a mistake", async () => {
+    getPatterns.mockResolvedValue({
+      patterns: [
+        { pattern: "vocab:i have a problem", type: "vocab", example: "I have a problem", frequency: 3, status: "active", probesPassed: 0, lastSeenAt: new Date().toISOString(), lastProbedAt: null },
+      ],
+    });
+    render(<PatternsPanel open={true} />);
+    await waitFor(() => expect(screen.getByText(/worth reaching for/i)).toBeInTheDocument());
+    expect(screen.queryByText(/slipping/i)).not.toBeInTheDocument();
+  });
+
+  it("caps the panel's height so a long list scrolls instead of pushing the conversation off-screen", () => {
+    getPatterns.mockResolvedValue({ patterns: [] });
+    const { container } = render(<PatternsPanel open={true} />);
+    const section = container.querySelector("section");
+    expect(section.className).toMatch(/max-h-/);
+    expect(section.className).toMatch(/overflow-y-auto/);
   });
 });

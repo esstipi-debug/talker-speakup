@@ -1,6 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { render, waitFor, screen } from "@testing-library/react";
 import { axe } from "jest-axe";
+
+vi.mock("../lib/api.js", () => ({ getPatterns: vi.fn() }));
+import { getPatterns } from "../lib/api.js";
 import VoiceStatus from "./VoiceStatus.jsx";
 import TranscriptReview from "./TranscriptReview.jsx";
 import MicButton from "./MicButton.jsx";
@@ -120,7 +123,13 @@ describe("accessibility", () => {
   });
 
   it("PatternsPanel has no axe violations (with rows)", async () => {
+    getPatterns.mockResolvedValue({
+      patterns: [
+        { pattern: "grammar:x", type: "grammar", example: "I have 30 years", frequency: 4, status: "active", probesPassed: 0, lastSeenAt: new Date().toISOString(), lastProbedAt: null },
+      ],
+    });
     const { container } = render(<PatternsPanel open={true} />);
+    await waitFor(() => expect(screen.getByText("I have 30 years")).toBeInTheDocument());
     expect(await axe(container)).toHaveNoViolations();
   });
 });

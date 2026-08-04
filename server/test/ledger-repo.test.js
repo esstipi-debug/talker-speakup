@@ -7,6 +7,7 @@ import {
   applyProbeOutcome,
   listPatterns,
 } from "../src/repo/ledger.js";
+import { getPrisma } from "../src/db.js";
 
 const entry = (pattern) => ({ pattern, type: "grammar", example: "I have 30 years", explanation: "Age takes 'be'." });
 
@@ -124,5 +125,29 @@ describe("ledger repo — listPatterns", () => {
     expect(row).toHaveProperty("example");
     expect(row).toHaveProperty("lastSeenAt");
     expect(row).toHaveProperty("lastProbedAt");
+  });
+
+  it("includes type, so the patterns view can distinguish corrections from upgrades", async () => {
+    const p = `vocab:list-type-${Math.random().toString(36).slice(2)}`;
+    await recordFindings([{ pattern: p, type: "vocab", example: "x", explanation: "y" }]);
+    const row = (await listPatterns()).find((r) => r.pattern === p);
+    expect(row.type).toBe("vocab");
+  });
+
+  it("caps the number of rows returned", async () => {
+    const suffix = Math.random().toString(36).slice(2);
+    const patterns = Array.from({ length: 55 }, (_, i) => `grammar:cap-test-${suffix}-${i}`);
+    for (const pattern of patterns) {
+      await recordFindings([{ pattern, type: "grammar", example: "x", explanation: "y" }]);
+    }
+    try {
+      const rows = await listPatterns();
+      expect(rows.length).toBeLessThanOrEqual(50);
+    } finally {
+      // These 55 rows would otherwise permanently crowd the shared test.db's
+      // frequency-1/active tier, pushing later tests' own single-row
+      // insertions (e.g. patterns-route.test.js) past the cap.
+      await getPrisma().errorLedger.deleteMany({ where: { pattern: { in: patterns } } });
+    }
   });
 });

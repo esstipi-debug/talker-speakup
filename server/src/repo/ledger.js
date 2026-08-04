@@ -48,7 +48,7 @@ export async function recordFindings(entries) {
  */
 export async function getProbeCandidates() {
   return getPrisma().errorLedger.findMany({
-    select: { pattern: true, example: true, explanation: true, frequency: true, status: true, lastProbedAt: true },
+    select: { pattern: true, type: true, example: true, explanation: true, frequency: true, status: true, lastProbedAt: true },
   });
 }
 
@@ -73,12 +73,22 @@ export async function applyProbeOutcome(pattern, passed) {
   return { pattern, passed, status: next.status };
 }
 
+/**
+ * The patterns view is meant to stay compact (spec D4: "a compact,
+ * read-only patterns view") — the plan deferred choosing a cap (spec §12.2)
+ * and then never actually picked one. UNCALIBRATED: a starting value, not a
+ * measurement.
+ */
+const PATTERNS_VIEW_CAP = 50;
+
 /** Ordered by status then frequency (spec §7) — resolved rows are the reward D4 exists to deliver, so they are included, not hidden. */
 export async function listPatterns() {
   return getPrisma().errorLedger.findMany({
     orderBy: [{ status: "asc" }, { frequency: "desc" }],
+    take: PATTERNS_VIEW_CAP,
     select: {
       pattern: true,
+      type: true,
       example: true,
       frequency: true,
       status: true,

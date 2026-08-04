@@ -39,9 +39,23 @@ export function chooseProbe({ candidates, turnsSoFar }) {
  * Built from `example` and `explanation` — never `pattern`, which is a
  * mangled lexical-prefix key that would tell the model nothing (spec §3.2,
  * §4.1). Starting wording (spec §12.1): iterate against real conversation.
+ *
+ * `type === "vocab"` candidates are upgrades — correct-but-plain language
+ * the LLM pass suggested improving, never a mistake (M2's whole reason for
+ * a separate upgrades channel from corrections). The directive must not
+ * call it "a known mistake": conflating the two teaches the learner that
+ * plain, correct English is an error, exactly what M2 exists to avoid.
  */
-function buildDirective({ example, explanation }) {
+function buildDirective({ example, explanation, type }) {
   const why = explanation ? ` — ${explanation}` : "";
+  if (type === "vocab") {
+    return (
+      `The learner has a piece of more natural phrasing worth reinforcing. A more idiomatic way exists ` +
+      `for something like: "${example}"${why}. In your next reply, steer the conversation toward a natural ` +
+      `opening where a sentence like that would come up again, so they get a chance to reach for the more ` +
+      `polished phrasing. Do not mention that you are testing them — just create the opening naturally.`
+    );
+  }
   return (
     `The learner has a recurring pattern worth revisiting. They previously said something like: ` +
     `"${example}"${why}. In your next reply, steer the conversation toward a natural opening where a ` +
