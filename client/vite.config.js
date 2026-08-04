@@ -12,6 +12,7 @@ export default defineConfig({
       "/health": "http://localhost:3001",
       "/progress": "http://localhost:3001",
       "/feedback": "http://localhost:3001",
+      "/patterns": "http://localhost:3001",
     },
   },
 });
