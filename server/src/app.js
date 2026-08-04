@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import turnRouter from "./routes/turn.js";
 import feedbackRouter from "./routes/feedback.js";
+import patternsRouter from "./routes/patterns.js";
 import { currentProvider } from "./brain/index.js";
 import { currentTTSProvider } from "./tts/index.js";
 import { currentSTTProvider } from "./stt/index.js";
@@ -38,6 +39,7 @@ app.get("/health", async (_req, res) => {
 
 app.use("/turn", turnRouter);
 app.use("/feedback", feedbackRouter);
+app.use("/patterns", patternsRouter);
 
 // Fallback error handler so nothing crashes the single-user server.
 app.use((err, _req, res, _next) => {
