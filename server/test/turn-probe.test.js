@@ -53,13 +53,19 @@ describe("POST /turn — probe field", () => {
     }
     let sessionId = null;
     let lastBody;
-    for (let i = 0; i < PROBE_TURN_INTERVAL; i += 1) {
+    // countUserTurns reflects turns already PERSISTED before this call, so
+    // turnsSoFar over calls 1..N is 0, 1, 2, ... — reaching a value equal to
+    // PROBE_TURN_INTERVAL takes PROBE_TURN_INTERVAL + 1 calls, not
+    // PROBE_TURN_INTERVAL calls.
+    for (let i = 0; i < PROBE_TURN_INTERVAL + 1; i += 1) {
       lastBody = (await turn({ utterance: `turn ${i}`, sessionId })).body;
       sessionId = lastBody.sessionId;
     }
-    // With only one eligible candidate in the whole table this pattern may or
-    // may not be the one chosen if other tests left eligible rows behind —
-    // assert the shape and that *some* probe fired, not which one.
-    expect(lastBody.probe === null || typeof lastBody.probe.pattern).not.toBe(undefined);
+    // We seeded one guaranteed-eligible pattern above, so the pool can never
+    // be empty at this point — a probe must fire, even if it isn't
+    // necessarily OUR pattern (other tests may have left eligible rows with
+    // higher frequency in the same shared table).
+    expect(lastBody.probe).not.toBeNull();
+    expect(typeof lastBody.probe.pattern).toBe("string");
   });
 });
