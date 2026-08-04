@@ -59,6 +59,25 @@ rate.
       `vennify/t5-base-grammar-correction` as a third pass — a follow-up decision, not part of M2, and
       not to be pre-committed without this evaluation's evidence.
 
+## M4 error ledger exploitation — hand evaluation (spec §9.4, not automatable)
+
+Per `docs/superpowers/specs/2026-08-03-m4-error-ledger-design.md` §9.4 and §8.2: no test can verify
+that the coach's elicitation actually reads as natural conversation rather than an interrogation, or
+that the model obeyed the probe directive at all. This is the only check on the milestone's central
+assumption, so it belongs on record here, not lost with the branch's scratch directory.
+
+- [ ] **20-turn session, read by hand.** Count how many probes are recognisable as probes (the learner
+      would notice they were being tested) versus how many pass as ordinary conversation. If probes are
+      conspicuous, the throttle (`PROBE_TURN_INTERVAL`) or the directive's wording
+      (`server/src/coach/probe.js`'s `buildDirective`) needs revising before more sessions accumulate
+      transitions built on probes the learner was visibly dodging.
+- [ ] Record the pass/fail judgment per turn here (or link to where it's recorded) once run.
+- [ ] Once real sessions exist, answer spec §11's two calibration questions against real ledger rows:
+      does anything ever become probeable (`frequency >= MIN_PROBE_FREQUENCY` needs three sightings of
+      the *same* four-token opening), and does anything ever resolve (three passes at one probe per
+      three turns is roughly 27 turns per pattern)? Both were unanswerable at design time because the
+      ledger was empty (spec §1, §11).
+
 ## M2 → M4 handover notes
 
 Things the M2 reviews surfaced that only matter once M4 starts reading the ledger. Recorded here
