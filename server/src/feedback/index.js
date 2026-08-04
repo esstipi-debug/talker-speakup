@@ -61,7 +61,7 @@ export async function buildFeedback({ utterance, history = [], prosody = null, s
   const upgrades = llm.upgrades.map((u) => ({ ...u, pattern: toPattern("vocab", u.original) }));
 
   const frequencies = await safeFrequencies([...corrections, ...upgrades].map((x) => x.pattern));
-  const byFrequency = (a, b) => (frequencies.get(b.pattern) ?? 0) - (frequencies.get(a.pattern) ?? 0);
+  const byFrequency = (a, b) => (frequencies.get(b.pattern)?.frequency ?? 0) - (frequencies.get(a.pattern)?.frequency ?? 0);
   corrections.sort(byFrequency);
   upgrades.sort(byFrequency);
 

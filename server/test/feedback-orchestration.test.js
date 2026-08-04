@@ -54,7 +54,7 @@ describe("buildFeedback", () => {
   it("orders by the learner's historical frequency, not by discovery order", async () => {
     lintUtterance.mockResolvedValue([finding("the people is"), finding("I have 30 years")]);
     const { toPattern } = await import("../src/feedback/pattern.js");
-    getFrequencies.mockResolvedValue(new Map([[toPattern("grammar", "I have 30 years"), 9]]));
+    getFrequencies.mockResolvedValue(new Map([[toPattern("grammar", "I have 30 years"), { frequency: 9, status: "active" }]]));
     const out = await buildFeedback({ utterance: UTTERANCE });
     expect(out.corrections[0].original).toBe("I have 30 years");
   });
