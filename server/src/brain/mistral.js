@@ -14,9 +14,13 @@ export class MistralBrain {
     this.model = process.env.MISTRAL_MODEL?.trim() || "mistral-small-latest";
   }
 
-  async evaluateTurn({ userUtterance, history = [] }) {
+  async evaluateTurn({ userUtterance, history = [], probeDirective = null }) {
     const messages = [
       { role: "system", content: selectCoachPrompt() },
+      // M4: a second system message, never concatenated into the base prompt
+      // (spec §4.1) — coachSystemM2 stays a single freezable artifact, and
+      // the directive is the ephemeral per-turn context it actually is.
+      ...(probeDirective ? [{ role: "system", content: probeDirective }] : []),
       ...history.map((m) => ({
         role: m.role === "coach" ? "assistant" : "user",
         content: m.text,
