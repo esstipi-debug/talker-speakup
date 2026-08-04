@@ -1,18 +1,25 @@
 import * as local from "./local.js";
+import * as feeds from "./feeds.js";
 
 /**
  * Seed provider chain. Each provider returns a seed or null; the first
  * non-null wins. `local` is last and never returns null, so this function
  * cannot fail to produce an opening topic.
  *
- * Phase 2 inserts the RSS-backed `feeds` provider ahead of `local`. That is
- * the entire integration: no caller changes, and a dry or unreachable feed
- * degrades to `local` by falling through, not by an error path.
+ * `feeds` only joins the chain when SOURCE_FEEDS is configured — mirrors
+ * brain/index.js's auto-detect shape. A dry or unreachable feed degrades to
+ * `local` by falling through, not by an error path.
+ *
+ * `providers` is a parameter rather than a module-level const so tests can
+ * inject a stub chain (e.g. a provider that throws or returns null) without
+ * reaching into module internals.
  */
-const PROVIDERS = [local];
+function defaultProviders() {
+  return feeds.configuredFeeds().length > 0 ? [feeds, local] : [local];
+}
 
-export async function nextSeed() {
-  for (const provider of PROVIDERS) {
+export async function nextSeed(providers = defaultProviders()) {
+  for (const provider of providers) {
     try {
       const seed = await provider.nextSeed();
       if (seed) return seed;

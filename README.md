@@ -8,9 +8,9 @@
 You talk. It listens, answers out loud, and — milestone by milestone — starts remembering exactly how you get it wrong.
 
 ![status](https://img.shields.io/badge/status-M2%20shipped%20·%20M7%20in%20progress-8b6cff?style=flat-square)
-![local first](https://img.shields.io/badge/local--first-no%20account%2C%20no%20cloud-2ee6a6?style=flat-square)
+![local first](https://img.shields.io/badge/local--first-no%20account%2C%20no%20server%20lock--in-2ee6a6?style=flat-square)
 ![stack](https://img.shields.io/badge/React%2019%20·%20Express%205%20·%20Prisma-15101f?style=flat-square)
-![tests](https://img.shields.io/badge/tests-281%20passing-ffb35c?style=flat-square)
+![tests](https://img.shields.io/badge/tests-338%20passing-ffb35c?style=flat-square)
 
 </div>
 
@@ -27,8 +27,11 @@ and multiple choice never puts you under time pressure. A human tutor does, but 
 they don't want to be rude.
 
 SpeakUp is the opposite trade: infinite patience, zero social cost, 3am availability, and a memory that
-never lets a mistake quietly become a habit. It runs entirely on your machine — the mic never leaves
-the building.
+never lets a mistake quietly become a habit. The transcript, the database, and the grammar pass never
+leave your machine. The audio doesn't stay local by default, though: today it's transcribed by the
+browser's speech service — Google's servers, on the Chrome path everyone is on — until M6 ships local
+Whisper via `voicebox`. See [Endpoints](#endpoints) for the dormant `/turn/audio` path that already
+exists for that.
 
 ## The loop
 
@@ -156,7 +159,7 @@ you *acquired* get resurfaced too, not only errors you made.
 | **M5** | Custom scenarios — job interview, standup, doctor's visit, arguing with a landlord | planned |
 | **M6** | Fully offline — local Whisper STT (the `/turn/audio` path already exists, dormant) | planned |
 | **M7** | **Accent & prosody** — teaches rhythm, then measures it. Forced alignment (MFA) rather than wav2vec2/GOP, whose best published F1 for open-vocabulary phone-level error detection is 61–63% — a coin flip with authority | 🚧 slices 1–3 |
-| **M8** | **Sourced proactivity** — the coach opens on a subject worth arguing about. Phase 1 (a local topic rotation) shipped; phase 2 feeds it from RSS channels you choose | 🚧 phase 1 |
+| **M8** | **Sourced proactivity** — the coach opens on a subject worth arguing about. Phase 1 (a local topic rotation) and phase 2 (RSS/Atom feeds via `SOURCE_FEEDS`, cache-first, falls back to the rotation) have both shipped | ✅ shipped |
 
 **What M7 has actually shipped:** a silent-pause profile computed entirely in the browser (an import-free `AudioWorklet`, an adaptive floor, clause-boundary vs mid-phrase placement anchored on the recognizer's own endpoint decisions), a persistence spine, and a pronunciation provider factory with `none` as a first-class state. The Pronunciation Gym, the echo moment and the scoring sidecar are slices 4–8, gated on two spikes that have not run yet.
 
@@ -192,6 +195,7 @@ speakup/
         ├── tts/          kokoro | voicebox | browser
         ├── stt/          voicebox | none     (server-side path, dormant until M6)
         ├── pronunciation/ local | mock | none  (sidecar arrives in slice 3)
+        ├── seed/         feeds | local        → the coach's opening topic (M8)
         ├── feedback/     Harper (mechanical) + LLM (pedagogical) → corrections + upgrades (M2)
         ├── metrics/      hesitation (per turn) + session fluency — internal indices, no external calibration
         └── prompts/      the coach's personality lives here — not in the weights; m1 | m2 via COACH_PROMPT
@@ -208,6 +212,7 @@ sees a string where it expects an object.
 | **tts** | `kokoro`, `voicebox`, `browser` | `kokoro` | If TTS dies mid-turn the server still returns the turn and the client falls back to the browser voice. The loop never breaks because a container is down. |
 | **stt** | `voicebox`, unset | unset | Unset = browser Web Speech. Set = server transcribes (`POST /turn/audio`). |
 | **pron** | `local`, `mock`, `none` | `none` | `none` is a supported state, not an error — no scorer means an unscored card, nothing throws. There is deliberately **no health probe**: reachability is whatever the score call returns, so starting the sidecar mid-session just works on the next attempt. |
+| **sources** | `feeds`, `local` | auto | No `SOURCE_FEEDS` → the coach opens from a built-in topic rotation. Set it to a comma-separated list of RSS/Atom feed URLs and it opens on topics pulled from those instead — cache-first, refreshed in the background at boot, never blocking session start. A dead or empty feed degrades to the rotation invisibly. |
 | **`COACH_PROMPT`** | `m2`, `m1` | `m2` | `m2` is the pushier C1–C2 coach; `m1` is the frozen pre-M2 baseline, kept so the two can be compared on real conversation. See the M2 spec §3 D3. |
 
 > On models: the coach's pedagogy lives in `server/src/prompts/coach-system.js`, **not** in fine-tuned
@@ -320,8 +325,10 @@ Motion is compositor-only (`transform` / `opacity`) and every animation is disab
 
 ## Principles
 
-1. **Local-first.** Your voice is the most personal data you have. It stays on the machine. The cloud
-   brain is opt-in and swappable for a local one.
+1. **Local-first, honestly scoped.** The transcript, the database, and the grammar pass stay on your
+   machine. The audio itself is transcribed via the browser's speech service (Google's, by default in
+   Chrome) until M6 ships local Whisper — see [Why this exists](#why-this-exists). The cloud brain is
+   opt-in and swappable for a local one.
 2. **$0 by default.** Mock brain, browser voice, SQLite. Paying for a better model is an upgrade, never
    a requirement to start.
 3. **Degrade, never break.** TTS down → browser voice. No mic → text input. No key → mock brain.

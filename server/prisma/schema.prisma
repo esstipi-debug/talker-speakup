@@ -78,6 +78,22 @@ model Scenario {
   sessions     Session[]
 }
 
+// Cache + used-ledger for the M8 phase 2 RSS seed provider, in one table:
+// `usedAt IS NULL` is the entire "unused" query. `guid` is the upsert key so
+// a repeated refresh of the same feed is idempotent and never resets usedAt.
+model FeedItem {
+  id          String    @id @default(cuid())
+  guid        String    @unique
+  feedUrl     String
+  sourceLabel String?
+  title       String
+  description String?
+  url         String?
+  publishedAt DateTime?
+  usedAt      DateTime?
+  createdAt   DateTime  @default(now())
+}
+
 model Progress {
   id            String   @id @default(cuid())
   date          DateTime @default(now())

@@ -27,6 +27,14 @@ describe("GET /health", () => {
     expect(body).toHaveProperty("stt");
     expect(body).toHaveProperty("pron");
   });
+
+  it("reports the seed source configuration, not reachability", async () => {
+    const res = await fetch(`${base}/health`);
+    const body = await res.json();
+    expect(body.sources).toMatchObject({ provider: "local", feeds: 0 });
+    expect(typeof body.sources.cached).toBe("number");
+    expect(typeof body.sources.unused).toBe("number");
+  });
 });
 
 describe("POST /turn", () => {
