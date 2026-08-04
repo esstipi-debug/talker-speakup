@@ -11,6 +11,16 @@ export async function startSession() {
 }
 
 /**
+ * The database is the source of truth for "how far into the session are
+ * we" — the request body is not trusted for this (spec §5.3). Used to gate
+ * probe eligibility: a fresh or unknown session must never probe.
+ */
+export async function countUserTurns(sessionId) {
+  if (!sessionId) return 0;
+  return getPrisma().turn.count({ where: { sessionId, role: "user" } });
+}
+
+/**
  * Stamps a session with the provenance of its opening topic. Separate from
  * startSession because the session exists before the seed is chosen: /turn/open
  * may adopt a session the client already had.
