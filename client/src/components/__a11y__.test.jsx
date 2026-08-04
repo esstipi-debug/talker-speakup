@@ -7,6 +7,7 @@ import MicButton from "./MicButton.jsx";
 import PauseNote from "./PauseNote.jsx";
 import StatHeader from "./StatHeader.jsx";
 import FeedbackPanel from "./FeedbackPanel.jsx";
+import PatternsPanel from "./PatternsPanel.jsx";
 
 const vs = {
   status: "idle",
@@ -99,6 +100,11 @@ describe("accessibility", () => {
         }}
       />
     );
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("PatternsPanel has no axe violations (with rows)", async () => {
+    const { container } = render(<PatternsPanel open={true} />);
     expect(await axe(container)).toHaveNoViolations();
   });
 });
