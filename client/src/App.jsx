@@ -6,11 +6,13 @@ import TranscriptReview from "./components/TranscriptReview.jsx";
 import VoiceStatus from "./components/VoiceStatus.jsx";
 import PauseNote from "./components/PauseNote.jsx";
 import FeedbackPanel from "./components/FeedbackPanel.jsx";
+import PatternsPanel from "./components/PatternsPanel.jsx";
 import { useConversation } from "./hooks/useConversation.js";
 
 export default function App() {
   const c = useConversation();
   const [textInput, setTextInput] = useState("");
+  const [showPatterns, setShowPatterns] = useState(false);
   const scrollRef = useRef(null);
 
   useEffect(() => {
@@ -62,7 +64,11 @@ export default function App() {
         brain={c.providers.brain}
         tts={c.providers.tts}
         stt={c.providers.stt}
+        onTogglePatterns={() => setShowPatterns((v) => !v)}
+        patternsOpen={showPatterns}
       />
+
+      <PatternsPanel open={showPatterns} />
 
       <main ref={scrollRef} className="flex-1 overflow-y-auto px-5 py-6 space-y-4">
         {c.messages.map((m, i) => (

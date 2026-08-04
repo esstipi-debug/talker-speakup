@@ -1,6 +1,6 @@
 const XP_PER_LEVEL = 100;
 
-export default function StatHeader({ totalXp = 0, turns = 0, sessionFluency = null, brain, tts, stt }) {
+export default function StatHeader({ totalXp = 0, turns = 0, sessionFluency = null, brain, tts, stt, onTogglePatterns, patternsOpen = false }) {
   const level = Math.floor(totalXp / XP_PER_LEVEL) + 1;
   const xpInLevel = totalXp % XP_PER_LEVEL;
   const pct = Math.round((xpInLevel / XP_PER_LEVEL) * 100);
@@ -42,6 +42,18 @@ export default function StatHeader({ totalXp = 0, turns = 0, sessionFluency = nu
             </div>
             <div className="text-[10px] uppercase tracking-wide text-muted mt-1">pace</div>
           </div>
+        )}
+        {onTogglePatterns && (
+          <button
+            type="button"
+            onClick={onTogglePatterns}
+            aria-pressed={patternsOpen}
+            className={`text-[10px] uppercase tracking-wide px-2 py-1 rounded-full border transition ${
+              patternsOpen ? "border-accent/60 text-accent" : "border-line text-muted hover:text-coach-soft hover:border-coach/50"
+            }`}
+          >
+            📋 Patterns
+          </button>
         )}
         <Stat label="turns" value={turns} />
         <div className="flex flex-col items-end gap-1">

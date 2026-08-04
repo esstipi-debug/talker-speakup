@@ -84,6 +84,22 @@ describe("accessibility", () => {
     expect(await axe(container)).toHaveNoViolations();
   });
 
+  it("StatHeader has no axe violations (with the patterns toggle)", async () => {
+    const { container } = render(
+      <StatHeader
+        totalXp={240}
+        turns={5}
+        sessionFluency={72}
+        brain="mistral"
+        tts="kokoro"
+        stt="whisper"
+        onTogglePatterns={() => {}}
+        patternsOpen={true}
+      />,
+    );
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
   it("FeedbackPanel has no violations", async () => {
     const { container } = render(
       <FeedbackPanel
