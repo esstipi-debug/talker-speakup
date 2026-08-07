@@ -213,6 +213,7 @@ sees a string where it expects an object.
 
 | Slot | Options | Default | Notes |
 |---|---|---|---|
+| **mode** | `auto`, `web`, `cloud`, `hybrid` | `auto` | Sets the `brain` and `tts` defaults together — see [Modes](#modes). Select with `--mode=`, or `SPEAKUP_MODE`. Any explicit env var below still wins. |
 | **brain** | `mock`, `mistral` | auto | No key → `mock`, offline and free. Key present → Mistral. |
 | **tts** | `kokoro`, `voicebox`, `browser` | `kokoro` | If TTS dies mid-turn the server still returns the turn and the client falls back to the browser voice. The loop never breaks because a container is down. |
 | **stt** | `voicebox`, unset | unset | Unset = browser Web Speech. Set = server transcribes (`POST /turn/audio`). |
@@ -259,6 +260,27 @@ the mock brain is offline and free, and the browser handles voice on both ends.
 
 **Chrome or Edge** for the mic (Web Speech API support). Every other browser still works via the text
 input — the fallback is a first-class path, not an afterthought.
+
+### Modes
+
+The two configurations this project actually runs have names, and one command each:
+
+```bash
+npm run dev:hybrid
+```
+
+| | `web` | `cloud` | `hybrid` |
+|---|---|---|---|
+| brain | `mock` | Mistral | Mistral |
+| coach voice | browser | browser | Kokoro, local |
+| `upgrades` channel | off | on | on |
+| needs | nothing | an API key | key + Docker on `:8880` |
+
+A mode sets defaults for two slots and nothing else — `stt`, `pron` and the seed sources stay independent env vars, and **an explicit env var always beats the mode**, so an existing `.env` keeps meaning what it meant.
+
+Plain `npm run dev` is mode `auto`: exactly the pre-modes behaviour, which is Mistral if a key is present and Kokoro for the voice.
+
+`GET /health` reports the mode you asked for **and** the one you got, because they can differ. Ask for `hybrid` with no key and you get the mock brain; ask for it with Kokoro down and the coach speaks in the browser's voice from the first failed turn until one succeeds. The header pill shows the mode you are actually in, marked when it is not the one you requested.
 
 ### Turning on the good stuff
 
