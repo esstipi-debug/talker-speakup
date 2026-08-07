@@ -17,7 +17,7 @@ export default defineConfig({
       provider: "v8",
       // Globs, not file lists: later tasks add modules to these directories
       // and are covered the moment they land.
-      include: ["src/feedback/**/*.js", "src/metrics/**/*.js", "src/coach/**/*.js", "src/ledger/**/*.js"],
+      include: ["src/feedback/**/*.js", "src/metrics/**/*.js", "src/coach/**/*.js", "src/ledger/**/*.js", "src/config/**/*.js"],
       thresholds: { lines: 80, functions: 80, branches: 80, statements: 80 },
     },
   },
