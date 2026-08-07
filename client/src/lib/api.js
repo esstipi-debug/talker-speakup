@@ -18,7 +18,7 @@ export async function getHealth() {
   try {
     const res = await fetch("/health");
     if (!res.ok) return null;
-    return res.json(); // { status, brain, tts, stt, ts }
+    return res.json(); // { status, brain, tts, stt, pron, feedback, mode, sources, ts }
   } catch {
     return null;
   }

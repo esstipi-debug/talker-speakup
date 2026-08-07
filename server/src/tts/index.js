@@ -1,5 +1,6 @@
 import { KokoroTTS } from "./kokoro.js";
 import { VoiceboxTTS } from "./voicebox.js";
+import { slotDefault } from "../config/mode.js";
 
 /**
  * Pluggable TTS factory (handoff §7.2).
@@ -13,7 +14,7 @@ let _tts = null;
 let _provider = null;
 
 function resolveProvider() {
-  return process.env.TTS_PROVIDER?.trim().toLowerCase() || "kokoro";
+  return process.env.TTS_PROVIDER?.trim().toLowerCase() || slotDefault("tts") || "kokoro";
 }
 
 export function getTTS() {

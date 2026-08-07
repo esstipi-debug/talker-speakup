@@ -7,6 +7,7 @@ import { startSession, recordTurn, recordSeed, countUserTurns } from "../repo/se
 import { getProbeCandidates, markProbed } from "../repo/ledger.js";
 import { chooseProbe } from "../coach/probe.js";
 import { nextSeed } from "../seed/index.js";
+import { noteTTSOutcome } from "../config/mode.js";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
@@ -38,8 +39,10 @@ async function runTurn(utterance, history, probeDirective = null) {
       const out = await tts.speak(result.coach_reply);
       audio = out.audio.toString("base64");
       audioFormat = out.format;
+      noteTTSOutcome(true);
     } catch (ttsErr) {
       console.warn("[turn] TTS failed → client will use browser voice:", ttsErr.message);
+      noteTTSOutcome(false);
     }
   }
 
@@ -195,8 +198,10 @@ router.post("/open", async (req, res) => {
       const out = await tts.speak(result.coach_reply);
       audio = out.audio.toString("base64");
       audioFormat = out.format;
+      noteTTSOutcome(true);
     } catch (ttsErr) {
       console.warn("[turn/open] TTS failed → client will use browser voice:", ttsErr.message);
+      noteTTSOutcome(false);
     }
   }
 

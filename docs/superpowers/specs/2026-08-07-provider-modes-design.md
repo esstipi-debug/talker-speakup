@@ -203,7 +203,7 @@ No `start:*` variants: this runs on `localhost` only, and nothing uses the `star
 | Failure | Behavior |
 |---|---|
 | Unknown `--mode` value | Warn, fall back to `auto`, keep serving (D8) |
-| `--mode=hybrid`, no API key | Brain resolves `mock`; `effective: "web"`, `reasons: ["missing-mistral-key"]` |
+| `--mode=hybrid`, no API key | Brain resolves `mock`; `effective: "custom"`, `reasons: ["missing-mistral-key"]` — the real pair is (mock, kokoro), which matches no preset |
 | `--mode=hybrid`, Kokoro down | Turn returns without audio as it does today; client speaks; after the first failed turn `reasons: ["tts-unreachable"]` |
 | Kokoro started mid-session | Next successful synthesis clears the reason. No restart (D6) |
 | Both slots degraded | `reasons` carries both; `effective` is `web` |

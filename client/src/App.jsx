@@ -64,6 +64,7 @@ export default function App() {
         brain={c.providers.brain}
         tts={c.providers.tts}
         stt={c.providers.stt}
+        mode={c.providers.mode}
         onTogglePatterns={() => setShowPatterns((v) => !v)}
         patternsOpen={showPatterns}
       />

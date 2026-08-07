@@ -103,6 +103,13 @@ describe("accessibility", () => {
     expect(await axe(container)).toHaveNoViolations();
   });
 
+  it("StatHeader with a degraded mode has no axe violations", async () => {
+    const { container } = render(
+      <StatHeader totalXp={120} turns={4} mode={{ requested: "hybrid", effective: "cloud", degraded: true, reasons: ["tts-unreachable"] }} />,
+    );
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
   it("FeedbackPanel has no violations", async () => {
     const { container } = render(
       <FeedbackPanel

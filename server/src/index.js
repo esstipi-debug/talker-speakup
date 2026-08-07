@@ -6,6 +6,7 @@ import { currentPronProvider } from "./pronunciation/index.js";
 import { setupHarper } from "./feedback/harper.js";
 import { activePromptLabel } from "./prompts/coach-system.js";
 import { refreshFeeds } from "./seed/feeds.js";
+import { resolveMode } from "./config/mode.js";
 
 const PORT = Number(process.env.PORT) || 3001;
 
@@ -21,7 +22,7 @@ refreshFeeds().catch((err) => console.warn("[seed/feeds] boot refresh failed:", 
 
 app.listen(PORT, () => {
   console.log(
-    `[server] SpeakUp API → http://localhost:${PORT}  (brain: ${currentProvider()}, voice: ${currentTTSProvider()}, stt: ${currentSTTProvider()}, pron: ${currentPronProvider()})`,
+    `[server] SpeakUp API → http://localhost:${PORT}  (mode: ${resolveMode()}, brain: ${currentProvider()}, voice: ${currentTTSProvider()}, stt: ${currentSTTProvider()}, pron: ${currentPronProvider()})`,
   );
   console.log(`[brain] coach prompt = ${activePromptLabel()}`);
 });
