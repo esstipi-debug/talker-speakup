@@ -10,6 +10,7 @@ import { currentPronProvider } from "./pronunciation/index.js";
 import { harperStatus } from "./feedback/harper.js";
 import { configuredFeeds } from "./seed/feeds.js";
 import { stats as topicStats } from "./repo/topics.js";
+import { mountClient } from "./static.js";
 
 /**
  * Builds the Express app but never listens — so tests can import it and bind
@@ -40,6 +41,10 @@ app.get("/health", async (_req, res) => {
 app.use("/turn", turnRouter);
 app.use("/feedback", feedbackRouter);
 app.use("/patterns", patternsRouter);
+
+// Serves client/dist when a build exists (production). A no-op in dev and in
+// tests, where there is none — spec D3.
+mountClient(app);
 
 // Fallback error handler so nothing crashes the single-user server.
 app.use((err, _req, res, _next) => {
