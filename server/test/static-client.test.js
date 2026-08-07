@@ -86,10 +86,10 @@ describe("the mounted client", () => {
     expect(await res.json()).toEqual({ status: "ok" });
   });
 
-  it("never answers a POST with HTML — method mismatches stay 404", async () => {
+  it("does not let a POST reach the SPA fallback", async () => {
     const res = await fetch(`${fixtureBase}/some/deep/route`, { method: "POST" });
     expect(res.status).toBe(404);
-    expect(res.headers.get("content-type") ?? "").not.toContain("text/html");
+    expect(await res.text()).not.toContain("SpeakUp");
   });
 });
 

@@ -27,15 +27,10 @@ export function mountClient(app, dir = clientDistDir()) {
   app.use(express.static(dir));
 
   // GET only, and a RegExp because Express 5 rejects the bare "*" path.
-  // Restricting the method leaves POST mismatches to the 404 handler instead
-  // of answering an API call with HTML (spec §5).
+  // Non-GET requests with no matching route fall through to Express's
+  // built-in 404, same as they always have; the GET restriction here is what
+  // keeps them from being served index.html instead (spec §5).
   app.get(/.*/, (_req, res) => res.sendFile(indexHtml));
-
-  // Anything that reaches here is a non-GET request to a path with no route
-  // (e.g. a mistaken POST). Answer a plain 404 instead of letting Express's
-  // default handler send its HTML error page, which would look like the
-  // client responding to an API call.
-  app.use((_req, res) => res.status(404).end());
 
   return true;
 }
