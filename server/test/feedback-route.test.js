@@ -145,4 +145,38 @@ describe("POST /feedback", () => {
     const res = await request(app).get("/health");
     expect(["ok", "unavailable"]).toContain(res.body.feedback);
   });
+
+  it("attaches recurrence to each correction from the pre-write snapshot, always as active", async () => {
+    const turnId = await makeTurn("I have 30 years");
+    buildFeedback.mockResolvedValueOnce({
+      ...PAYLOAD,
+      corrections: [
+        { span: [0, 4], original: "test", suggestion: "fixed", message: "m", kind: "grammar", pattern: "grammar:test-pattern", source: "harper" },
+      ],
+      recordedPatterns: ["grammar:test-pattern"],
+      // Pre-write snapshot: this pattern was "resolved" before this sighting.
+      frequenciesBeforeWrite: { "grammar:test-pattern": { frequency: 5, status: "resolved" } },
+    });
+    const res = await request(app).post("/feedback").send({ utterance: "I have 30 years", turnId });
+    expect(res.status).toBe(200);
+    // +1 on frequency (the sighting that just happened); status forced to
+    // "active" regardless of the pre-write snapshot's "resolved" — a
+    // relapse, not a lingering resolved badge.
+    expect(res.body.corrections[0].recurrence).toEqual({ frequency: 6, status: "active" });
+  });
+
+  it("does not crash when frequenciesBeforeWrite is missing an entry for a correction's pattern", async () => {
+    const turnId = await makeTurn("I have 30 years");
+    buildFeedback.mockResolvedValueOnce({
+      ...PAYLOAD,
+      corrections: [
+        { span: [0, 4], original: "test", suggestion: "fixed", message: "m", kind: "grammar", pattern: "grammar:unseen-pattern", source: "harper" },
+      ],
+      recordedPatterns: ["grammar:unseen-pattern"],
+      frequenciesBeforeWrite: {}, // no prior entry — first-ever sighting
+    });
+    const res = await request(app).post("/feedback").send({ utterance: "I have 30 years", turnId });
+    expect(res.status).toBe(200);
+    expect(res.body.corrections[0].recurrence).toEqual({ frequency: 1, status: "active" });
+  });
 });

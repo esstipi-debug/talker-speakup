@@ -4,13 +4,13 @@
 
 # SpeakUp
 
-**An English speaking coach that lives on `localhost`.**
+**An English speaking coach that lives on `localhost` — or on a host you control.**
 You talk. It listens, answers out loud, and — milestone by milestone — starts remembering exactly how you get it wrong.
 
 ![status](https://img.shields.io/badge/status-M2%20shipped%20·%20M7%20in%20progress-8b6cff?style=flat-square)
-![local first](https://img.shields.io/badge/local--first-no%20account%2C%20no%20server%20lock--in-2ee6a6?style=flat-square)
+![local first](https://img.shields.io/badge/local--first%20by%20default-no%20lock--in-2ee6a6?style=flat-square)
 ![stack](https://img.shields.io/badge/React%2019%20·%20Express%205%20·%20Prisma-15101f?style=flat-square)
-![tests](https://img.shields.io/badge/tests-338%20passing-ffb35c?style=flat-square)
+![tests](https://img.shields.io/badge/tests-413%20passing-ffb35c?style=flat-square)
 
 </div>
 
@@ -27,8 +27,10 @@ and multiple choice never puts you under time pressure. A human tutor does, but 
 they don't want to be rude.
 
 SpeakUp is the opposite trade: infinite patience, zero social cost, 3am availability, and a memory that
-never lets a mistake quietly become a habit. The transcript, the database, and the grammar pass never
-leave your machine. The audio doesn't stay local by default, though: today it's transcribed by the
+never lets a mistake quietly become a habit. Run locally — the default — and the transcript, the
+database, and the grammar pass never leave your machine. Deployed (see [Deploy](#deploy)), they live on
+the host instead; that trade is the price of reaching it from a phone. The audio doesn't stay local by
+default, though: today it's transcribed by the
 browser's speech service — Google's servers, on the Chrome path everyone is on — until M6 ships local
 Whisper via `voicebox`. See [Endpoints](#endpoints) for the dormant `/turn/audio` path that already
 exists for that.
@@ -155,7 +157,8 @@ you *acquired* get resurfaced too, not only errors you made.
 | **M1.5** | **Voice I/O hardening** — `useConversation` state machine, live interim transcript, review/edit before send, barge-in, status + error banners, 93 tests, axe-clean | ✅ shipped `2026-07-24` |
 | **M2** | Structured feedback — Harper + LLM, `corrections` + `upgrades`, session fluency + hesitation meters, coach prompt recalibrated to **C1–C2** | ✅ shipped `2026-08-02` |
 | **M3** | Persistence — the schema stops being decorative and starts getting written to | ✅ shipped `2026-07-27` |
-| **M4** | Error ledger + vocab spaced repetition | ⏭️ next |
+| **M4** | **Error ledger exploitation** — the coach periodically steers toward a construction the learner keeps failing, and a read-only patterns view shows which habits are changing on evidence, not on silence | ✅ shipped |
+| **M4.5** | Vocabulary spaced repetition (`VocabItem`, SM-2) — deliberately deferred out of M4 (spec D1) | planned |
 | **M5** | Custom scenarios — job interview, standup, doctor's visit, arguing with a landlord | planned |
 | **M6** | Fully offline — local Whisper STT (the `/turn/audio` path already exists, dormant) | planned |
 | **M7** | **Accent & prosody** — teaches rhythm, then measures it. Forced alignment (MFA) rather than wav2vec2/GOP, whose best published F1 for open-vocabulary phone-level error detection is 61–63% — a coin flip with authority | 🚧 slices 1–3 |
@@ -196,6 +199,8 @@ speakup/
         ├── stt/          voicebox | none     (server-side path, dormant until M6)
         ├── pronunciation/ local | mock | none  (sidecar arrives in slice 3)
         ├── seed/         feeds | local        → the coach's opening topic (M8)
+        ├── coach/        probe.js             → which recurring mistake to elicit next (M4)
+        ├── ledger/       transitions.js       → the ErrorLedger status state machine (M4)
         ├── feedback/     Harper (mechanical) + LLM (pedagogical) → corrections + upgrades (M2)
         ├── metrics/      hesitation (per turn) + session fluency — internal indices, no external calibration
         └── prompts/      the coach's personality lives here — not in the weights; m1 | m2 via COACH_PROMPT
@@ -230,9 +235,10 @@ sees a string where it expects an object.
 |---|---|
 | `GET /health` | `{ status, brain, tts, stt, pron, feedback, ts }` — the UI renders these as live pills |
 | `POST /turn` | `{ utterance, history, sessionId?, prosody?, captureSettings? }` → `{ coach_reply, xp, audio?, audioFormat?, ttsProvider, sessionId, turnId }` — `turnId` is what `POST /feedback` attaches to |
+| `GET /patterns` | → `{ patterns: [{ example, frequency, status, probesPassed, lastSeenAt, lastProbedAt }] }` — read-only (M4); a pattern's `status` reflects deliberate elicitation outcomes, not silence — see the design spec's §10 for what can and cannot be honestly claimed from it |
 | `POST /turn/open` | `{ sessionId? }` → `{ coach_reply, xp, audio?, audioFormat?, ttsProvider, sessionId, seedProvider }` — the coach's first turn, before the learner has spoken |
 | `POST /turn/audio` | multipart `{ audio, history? }` → adds `transcript`. Returns `501` unless `STT_PROVIDER` is set |
-| `POST /feedback` | `{ utterance, turnId?, history?, prosody?, sessionPhonationMs?, sessionSyllables? }` → `{ corrections, upgrades, hesitation, sessionFluency, passes }` — deferred, per-turn structured feedback (M2), idempotent by `turnId`; persistence failing costs a row, never the response |
+| `POST /feedback` | `{ utterance, turnId?, history?, prosody?, sessionPhonationMs?, sessionSyllables?, probedPattern? }` → `{ corrections, upgrades, hesitation, sessionFluency, passes, probeResult }` — deferred, per-turn structured feedback (M2) plus M4's probe-outcome resolution, idempotent by `turnId`; persistence failing costs a row, never the response |
 
 `sessionId` comes back `null` when the server could not write to the one it was given — that is the
 signal to start a fresh session, not to retry a dead one. Persistence failing costs a row, never the
@@ -267,11 +273,48 @@ docker run -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-cpu
 
 `GET /health` reports which providers actually came up. See `server/.env.example` for every knob.
 
+### Deploy
+
+One Railway service, connected to the GitHub repo, plus a Volume. The service serves the API **and**
+the built client from the same origin, so there is no CORS and no API base URL to inject.
+
+| Setting | Value |
+|---|---|
+| Build command | `npm run build` |
+| Start command | `npm start` |
+| Volume mount path | `/data` |
+
+Variables, in the Railway dashboard:
+
+```
+MISTRAL_API_KEY=sk-...
+TTS_PROVIDER=browser
+DATABASE_URL=file:/data/speakup.db
+```
+
+`PORT` is injected by Railway. `BRAIN_PROVIDER` is unnecessary — with the key present, auto-detection
+resolves Mistral on its own.
+
+`TTS_PROVIDER=browser` is deliberate: the phone already has voices, and a Kokoro container would mean
+a second service running CPU inference for a worse trade.
+
+`railway.json` at the repo root pins the build and start commands in the repo, so the dashboard
+settings above are a fallback rather than the source of truth.
+
+**What a deployed instance is not:** it has no authentication, no accounts and no isolation. The URL
+is public, and anyone who finds it spends the API key and writes to the ledger. A spend limit on the
+Mistral account bounds that bill — but Railway bills by usage too, so the same URL is a second meter,
+and it wants its own usage limit. Two devices on the same URL share one ledger.
+
+**The mic works on Chrome for Android** — Railway serves HTTPS, which both `getUserMedia` and Web
+Speech require. iOS routes every browser through WebKit, where continuous recognition is doubtful;
+the text input is still a first-class path there, but that is not speaking practice.
+
 ---
 
 ## Tests
 
-**281 tests** — 183 on the client (Vitest + Testing Library + jsdom) and 98 on the server (Vitest, node
+**413 tests** — 210 on the client (Vitest + Testing Library + jsdom) and 203 on the server (Vitest, node
 environment, binding port 0 so they never collide with a running dev server). Coverage is gated at 80%
 on four metrics for the files where the bodies are buried: `useConversation.js`, `speech.js`,
 `micStream.js`, `lib/prosody/**` on the client, and `server/src/feedback/**` + `server/src/metrics/**`
@@ -325,10 +368,11 @@ Motion is compositor-only (`transform` / `opacity`) and every animation is disab
 
 ## Principles
 
-1. **Local-first, honestly scoped.** The transcript, the database, and the grammar pass stay on your
-   machine. The audio itself is transcribed via the browser's speech service (Google's, by default in
-   Chrome) until M6 ships local Whisper — see [Why this exists](#why-this-exists). The cloud brain is
-   opt-in and swappable for a local one.
+1. **Local-first, honestly scoped.** On a local run the transcript, the database, and the grammar
+   pass stay on your machine. A deployed instance moves all three onto the host — local-first is the
+   default, not a guarantee that survives being put on the internet. The audio itself is transcribed via
+   the browser's speech service (Google's, by default in Chrome) until M6 ships local Whisper — see
+   [Why this exists](#why-this-exists). The cloud brain is opt-in and swappable for a local one.
 2. **$0 by default.** Mock brain, browser voice, SQLite. Paying for a better model is an upgrade, never
    a requirement to start.
 3. **Degrade, never break.** TTS down → browser voice. No mic → text input. No key → mock brain.

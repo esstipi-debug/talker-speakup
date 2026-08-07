@@ -1,16 +1,19 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { postFeedback, postTurnOpen } from "./api.js";
+import { postFeedback, postTurnOpen, getPatterns } from "./api.js";
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe("postFeedback", () => {
   it("returns the payload on success", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+    const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ corrections: [], upgrades: [], passes: { mechanical: "ok", pedagogical: "ok" } }),
-    }));
-    const out = await postFeedback({ utterance: "hi", turnId: "t1" });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const out = await postFeedback({ utterance: "hi", turnId: "t1", probedPattern: "grammar:x" });
     expect(out.passes.mechanical).toBe("ok");
+    const sentBody = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(sentBody.probedPattern).toBe("grammar:x");
   });
 
   it("returns null on a server error instead of throwing", async () => {
@@ -55,5 +58,26 @@ describe("postTurnOpen", () => {
   it("resolves to null when the network is down", async () => {
     global.fetch = vi.fn().mockRejectedValue(new Error("offline"));
     expect(await postTurnOpen({})).toBeNull();
+  });
+});
+
+describe("getPatterns", () => {
+  it("returns the patterns payload on success", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ patterns: [{ pattern: "grammar:x", example: "x", frequency: 1, status: "active" }] }),
+    }));
+    const out = await getPatterns();
+    expect(out.patterns).toHaveLength(1);
+  });
+
+  it("returns null on a server error instead of throwing", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 502, json: async () => ({}) }));
+    await expect(getPatterns()).resolves.toBeNull();
+  });
+
+  it("returns null when the network is down", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+    await expect(getPatterns()).resolves.toBeNull();
   });
 });

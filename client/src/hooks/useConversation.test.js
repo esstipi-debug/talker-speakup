@@ -245,6 +245,45 @@ describe("useConversation — deferred feedback", () => {
   });
 });
 
+describe("useConversation — probe token", () => {
+  // Spec §5.1's sequencing trap: turn N+1's /turn resolves before turn N+1's
+  // /feedback fires, so the pending token from turn N must be read and sent
+  // BEFORE the new probe (if any) from turn N+1 overwrites it — otherwise
+  // turn N's probe is silently dropped and never resolves.
+  it("sends turn N's probe token with turn N+1's feedback request, not turn N+1's own probe", async () => {
+    postFeedback.mockResolvedValue(null);
+    postTurn
+      .mockResolvedValueOnce({ coach_reply: "ok1", xp: 1, sessionId: "s1", turnId: "t1", probe: { pattern: "grammar:turn-n" } })
+      .mockResolvedValueOnce({ coach_reply: "ok2", xp: 1, sessionId: "s1", turnId: "t2", probe: { pattern: "grammar:turn-n-plus-1" } });
+
+    const { result } = renderHook(() => useConversation());
+    await act(async () => { await result.current.submitText("first"); });
+    await act(async () => { await result.current.submitText("second"); });
+
+    expect(postFeedback.mock.calls[0][0].probedPattern).toBeNull();
+    expect(postFeedback.mock.calls[1][0].probedPattern).toBe("grammar:turn-n");
+  });
+
+  it("sends null probedPattern when no probe was ever issued", async () => {
+    postTurn.mockResolvedValue({ coach_reply: "ok", xp: 1, sessionId: "s1", turnId: "t1", probe: null });
+    postFeedback.mockResolvedValue(null);
+
+    const { result } = renderHook(() => useConversation());
+    await act(async () => { await result.current.submitText("hello"); });
+
+    expect(postFeedback.mock.calls[0][0].probedPattern).toBeNull();
+  });
+
+  it("still works when postTurn's response has no probe field at all (older/degraded response)", async () => {
+    postTurn.mockResolvedValue({ coach_reply: "ok", xp: 1, sessionId: "s1", turnId: "t1" });
+    postFeedback.mockResolvedValue(null);
+
+    const { result } = renderHook(() => useConversation());
+    await expect(act(async () => { await result.current.submitText("hello"); })).resolves.not.toThrow();
+    expect(postFeedback.mock.calls[0][0].probedPattern).toBeNull();
+  });
+});
+
 describe("useConversation — speech machine", () => {
   async function mounted() {
     const utils = renderHook(() => useConversation());

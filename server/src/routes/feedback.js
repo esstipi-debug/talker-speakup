@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { buildFeedback } from "../feedback/index.js";
 import { saveTurnFeedback, getTurnFeedback } from "../repo/session.js";
+import { applyProbeOutcome } from "../repo/ledger.js";
 
 const router = Router();
 
@@ -28,7 +29,7 @@ const inFlight = new Map();
  * spans are offsets into it.
  */
 router.post("/", async (req, res) => {
-  const { utterance, turnId, history, prosody, sessionPhonationMs, sessionSyllables } = req.body ?? {};
+  const { utterance, turnId, history, prosody, sessionPhonationMs, sessionSyllables, probedPattern } = req.body ?? {};
 
   if (typeof utterance !== "string" || !utterance.trim()) {
     return res.status(400).json({ error: 'Missing "utterance" (non-empty string).' });
@@ -45,13 +46,50 @@ router.post("/", async (req, res) => {
   }
 
   async function computeAndPersist() {
-    const payload = await buildFeedback({
+    const raw = await buildFeedback({
       utterance,
       history: Array.isArray(history) ? history : [],
       prosody: prosody ?? null,
       sessionPhonationMs: Number(sessionPhonationMs) || 0,
       sessionSyllables: Number(sessionSyllables) || 0,
     });
+    const { recordedPatterns, frequenciesBeforeWrite, ...publicFields } = raw;
+
+    // M4: attach recurrence to each correction from the pre-write snapshot
+    // buildFeedback already read, +1 for the sighting the write just
+    // recorded (spec §5.2 — the raw snapshot is "as of the previous turn").
+    // status is always "active", never the pre-write snapshot's value: every
+    // correction here was just recorded by recordFindings above, which
+    // unconditionally resets status to "active" on every sighting (spec §6).
+    // Reporting the stale pre-write status (e.g. "resolved") would show a
+    // false all-clear on the very turn a pattern relapsed — the opposite of
+    // spec §10's rule that a relapse revokes those states.
+    const corrections = publicFields.corrections.map((c) => {
+      const prior = frequenciesBeforeWrite[c.pattern];
+      return { ...c, recurrence: { frequency: (prior?.frequency ?? 0) + 1, status: "active" } };
+    });
+
+    // M4: resolve this turn's probe, if any. Reads recordedPatterns (pre-cap)
+    // rather than the capped `corrections`/`upgrades` above, so a reappeared
+    // pattern that got bumped out of the display cap is still scored
+    // correctly. This MUST stay inside computeAndPersist, behind both the
+    // stored-payload check above and the in-flight map below — see the
+    // Global Constraints note on applyProbeOutcome. Guarded the same way
+    // safeRecord/safeFrequencies degrade in feedback/index.js: a transient
+    // ledger write failure here must cost the probe outcome, never the rest
+    // of the payload.
+    let probeResult = null;
+    if (typeof probedPattern === "string" && probedPattern) {
+      try {
+        const reappeared = recordedPatterns.includes(probedPattern);
+        const outcome = await applyProbeOutcome(probedPattern, !reappeared);
+        if (outcome) probeResult = outcome;
+      } catch (err) {
+        console.warn("[feedback] probe outcome resolution failed, continuing:", err.message);
+      }
+    }
+
+    const payload = { ...publicFields, corrections, probeResult };
 
     // Persistence must never cost the payload — the rule /turn has followed
     // since M3.

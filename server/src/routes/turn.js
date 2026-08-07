@@ -3,7 +3,9 @@ import multer from "multer";
 import { getBrain } from "../brain/index.js";
 import { getTTS, currentTTSProvider } from "../tts/index.js";
 import { getSTT } from "../stt/index.js";
-import { startSession, recordTurn, recordSeed } from "../repo/session.js";
+import { startSession, recordTurn, recordSeed, countUserTurns } from "../repo/session.js";
+import { getProbeCandidates, markProbed } from "../repo/ledger.js";
+import { chooseProbe } from "../coach/probe.js";
 import { nextSeed } from "../seed/index.js";
 
 const router = Router();
@@ -17,7 +19,7 @@ const HISTORY_WINDOW = 8; // cap how much context we forward (handoff: ~8 turns)
  * client falls back to the browser voice, so the loop never breaks just
  * because the TTS provider is down. Shared by POST /turn and POST /turn/audio.
  */
-async function runTurn(utterance, history) {
+async function runTurn(utterance, history, probeDirective = null) {
   const window = Array.isArray(history) ? history.slice(-HISTORY_WINDOW) : [];
 
   const brain = getBrain();
@@ -25,6 +27,7 @@ async function runTurn(utterance, history) {
     userUtterance: utterance,
     history: window,
     scenario: null, // scenarios land in M5
+    probeDirective,
   });
 
   let audio = null;
@@ -41,6 +44,45 @@ async function runTurn(utterance, history) {
   }
 
   return { ...result, audio, audioFormat, ttsProvider: currentTTSProvider() };
+}
+
+/**
+ * The database is the source of truth for how far into the session we are
+ * (spec §5.3) — a failing count means no probe this turn, not a broken turn.
+ */
+async function safeTurnsSoFar(sessionId) {
+  try {
+    return await countUserTurns(sessionId);
+  } catch (err) {
+    console.warn("[turn] turn count failed, no probe this turn:", err.message);
+    return 0;
+  }
+}
+
+/**
+ * A fresh/unknown session (turnsSoFar 0) never probes — cheap short-circuit
+ * that also avoids a DB read on the most common request (a session's first
+ * turn). A ledger read failure degrades to no probe, never a broken turn
+ * (spec §8).
+ */
+async function safeChooseProbe(turnsSoFar) {
+  if (!turnsSoFar) return null;
+  try {
+    const candidates = await getProbeCandidates();
+    return chooseProbe({ candidates, turnsSoFar });
+  } catch (err) {
+    console.warn("[turn] probe selection failed, continuing without one:", err.message);
+    return null;
+  }
+}
+
+/** A probe that never reached the learner (the brain call below failed) must not be marked probed. */
+async function safeMarkProbed(pattern) {
+  try {
+    await markProbed(pattern);
+  } catch (err) {
+    console.warn("[turn] markProbed failed, pattern may be re-picked sooner than intended:", err.message);
+  }
 }
 
 /**
@@ -65,12 +107,19 @@ router.post("/", async (req, res) => {
     return res.status(400).json({ error: 'Missing "utterance" (non-empty string).' });
   }
 
+  const turnsSoFar = await safeTurnsSoFar(sessionId);
+  const probe = await safeChooseProbe(turnsSoFar);
+
   try {
-    const result = await runTurn(utterance.trim(), history);
+    const result = await runTurn(utterance.trim(), history, probe?.directive ?? null);
     // Persistence must never break the loop: a DB failure costs us a row,
     // not the learner's turn.
     const { sessionId: persistedId, turnId } = await persistTurn({ sessionId, utterance: utterance.trim(), prosody, captureSettings, result });
-    return res.json({ ...result, sessionId: persistedId, turnId });
+    // Only stamp lastProbedAt once the brain call above has actually
+    // succeeded — a probe that never reached the learner must not be pushed
+    // to the back of the rotation for nothing.
+    if (probe) await safeMarkProbed(probe.pattern);
+    return res.json({ ...result, sessionId: persistedId, turnId, probe: probe ? { pattern: probe.pattern } : null });
   } catch (err) {
     console.error("[turn] brain error:", err);
     return res.status(502).json({

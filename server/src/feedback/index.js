@@ -61,7 +61,7 @@ export async function buildFeedback({ utterance, history = [], prosody = null, s
   const upgrades = llm.upgrades.map((u) => ({ ...u, pattern: toPattern("vocab", u.original) }));
 
   const frequencies = await safeFrequencies([...corrections, ...upgrades].map((x) => x.pattern));
-  const byFrequency = (a, b) => (frequencies.get(b.pattern) ?? 0) - (frequencies.get(a.pattern) ?? 0);
+  const byFrequency = (a, b) => (frequencies.get(b.pattern)?.frequency ?? 0) - (frequencies.get(a.pattern)?.frequency ?? 0);
   corrections.sort(byFrequency);
   upgrades.sort(byFrequency);
 
@@ -89,6 +89,16 @@ export async function buildFeedback({ utterance, history = [], prosody = null, s
     hesitation,
     sessionFluency,
     passes: { mechanical, pedagogical: llm.status },
+    // M4-internal only — routes/feedback.js reads these two fields and must
+    // not let them reach the HTTP response or the persisted payload.
+    // `recordedPatterns` is pre-cap (everything actually written to the
+    // ledger this turn, spec §5: "does that pattern appear among the new
+    // findings"), unlike the capped `corrections`/`upgrades` above.
+    recordedPatterns: [...uniqueCorrections, ...uniqueUpgrades].map((x) => x.pattern),
+    // Plain object, not the Map `frequencies` is — JSON-safe, and this is
+    // the pre-write snapshot getFrequencies read before safeRecord ran, so a
+    // reader must add 1 to get the count as of *this* sighting (spec §5.2).
+    frequenciesBeforeWrite: Object.fromEntries(frequencies),
   };
 }
 

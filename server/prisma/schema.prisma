@@ -48,15 +48,21 @@ model Turn {
 }
 
 model ErrorLedger {
-  id          String   @id @default(cuid())
-  type        String // "grammar" | "vocab" | "register" | "pronunciation"
-  pattern     String   @unique // clave para upsert
-  example     String?
-  explanation String?
-  frequency   Int      @default(1)
-  status      String   @default("active") // "active" | "improving" | "resolved"
-  lastSeenAt  DateTime @default(now())
-  createdAt   DateTime @default(now())
+  id           String    @id @default(cuid())
+  type         String // "grammar" | "vocab" | "register" | "pronunciation"
+  pattern      String    @unique // clave para upsert
+  example      String?
+  explanation  String?
+  frequency    Int       @default(1)
+  status       String    @default("active") // "active" | "improving" | "resolved"
+  // M4: how many consecutive probes this pattern has passed since its last
+  // relapse. Capped at PROBE_PASSES_TO_RESOLVE by ledger/transitions.js.
+  probesPassed Int       @default(0)
+  lastSeenAt   DateTime  @default(now())
+  // M4: when this pattern was last chosen as a probe (not when it was last
+  // seen). Null means never probed. Drives oldest-first rotation (spec §5.3).
+  lastProbedAt DateTime?
+  createdAt    DateTime  @default(now())
 }
 
 model VocabItem {

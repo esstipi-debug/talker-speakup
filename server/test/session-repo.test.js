@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll } from "vitest";
-import { startSession, recordTurn, getSessionWithTurns, saveTurnFeedback, getTurnFeedback, recordSeed } from "../src/repo/session.js";
+import { startSession, recordTurn, getSessionWithTurns, saveTurnFeedback, getTurnFeedback, recordSeed, countUserTurns } from "../src/repo/session.js";
 import { getPrisma } from "../src/db.js";
 
 afterAll(() => getPrisma().$disconnect());
@@ -123,5 +123,32 @@ describe("seed provenance", () => {
     const stored = await getSessionWithTurns(session.id);
     expect(stored.seedProvider).toBeNull();
     expect(stored.topicId).toBeNull();
+  });
+});
+
+describe("session repo — countUserTurns", () => {
+  it("counts only user-role turns for the given session", async () => {
+    const session = await startSession();
+    await recordTurn({ sessionId: session.id, role: "coach", text: "hi" });
+    await recordTurn({ sessionId: session.id, role: "user", text: "hello" });
+    await recordTurn({ sessionId: session.id, role: "coach", text: "nice" });
+    await recordTurn({ sessionId: session.id, role: "user", text: "how are you" });
+
+    expect(await countUserTurns(session.id)).toBe(2);
+  });
+
+  it("returns 0 for a session with no turns yet", async () => {
+    const session = await startSession();
+    expect(await countUserTurns(session.id)).toBe(0);
+  });
+
+  it("returns 0 for a missing or falsy sessionId without querying", async () => {
+    expect(await countUserTurns(null)).toBe(0);
+    expect(await countUserTurns(undefined)).toBe(0);
+    expect(await countUserTurns("")).toBe(0);
+  });
+
+  it("returns 0 for a sessionId that does not exist", async () => {
+    expect(await countUserTurns("does-not-exist")).toBe(0);
   });
 });

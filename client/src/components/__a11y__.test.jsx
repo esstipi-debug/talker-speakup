@@ -1,12 +1,16 @@
 import { describe, it, expect, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { render, waitFor, screen } from "@testing-library/react";
 import { axe } from "jest-axe";
+
+vi.mock("../lib/api.js", () => ({ getPatterns: vi.fn() }));
+import { getPatterns } from "../lib/api.js";
 import VoiceStatus from "./VoiceStatus.jsx";
 import TranscriptReview from "./TranscriptReview.jsx";
 import MicButton from "./MicButton.jsx";
 import PauseNote from "./PauseNote.jsx";
 import StatHeader from "./StatHeader.jsx";
 import FeedbackPanel from "./FeedbackPanel.jsx";
+import PatternsPanel from "./PatternsPanel.jsx";
 
 const vs = {
   status: "idle",
@@ -83,6 +87,22 @@ describe("accessibility", () => {
     expect(await axe(container)).toHaveNoViolations();
   });
 
+  it("StatHeader has no axe violations (with the patterns toggle)", async () => {
+    const { container } = render(
+      <StatHeader
+        totalXp={240}
+        turns={5}
+        sessionFluency={72}
+        brain="mistral"
+        tts="kokoro"
+        stt="whisper"
+        onTogglePatterns={() => {}}
+        patternsOpen={true}
+      />,
+    );
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
   it("FeedbackPanel has no violations", async () => {
     const { container } = render(
       <FeedbackPanel
@@ -99,6 +119,17 @@ describe("accessibility", () => {
         }}
       />
     );
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("PatternsPanel has no axe violations (with rows)", async () => {
+    getPatterns.mockResolvedValue({
+      patterns: [
+        { pattern: "grammar:x", type: "grammar", example: "I have 30 years", frequency: 4, status: "active", probesPassed: 0, lastSeenAt: new Date().toISOString(), lastProbedAt: null },
+      ],
+    });
+    const { container } = render(<PatternsPanel open={true} />);
+    await waitFor(() => expect(screen.getByText("I have 30 years")).toBeInTheDocument());
     expect(await axe(container)).toHaveNoViolations();
   });
 });

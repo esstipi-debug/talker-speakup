@@ -3,9 +3,12 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "node --env-file=.env --watch src/index.js",
-    "start": "node --env-file=.env src/index.js",
+    "start": "prisma migrate deploy && node src/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
@@ -19,11 +22,11 @@
     "express": "^5.2.1",
     "fast-xml-parser": "^5.10.1",
     "harper.js": "2.7.0",
-    "multer": "^2.2.0"
+    "multer": "^2.2.0",
+    "prisma": "^6.19.3"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^4.1.10",
-    "prisma": "^6.19.3",
     "supertest": "^7.2.2",
     "vitest": "^4.1.10"
   }
