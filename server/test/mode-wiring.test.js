@@ -44,4 +44,17 @@ describe("GET /health — mode", () => {
       expect(body).toHaveProperty(key);
     }
   });
+
+  it("stays coherent after the opener turn synthesizes, before the learner has spoken", async () => {
+    await fetch(`${base}/turn/open`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const res = await fetch(`${base}/health`);
+    const body = await res.json();
+    expect(body.mode.requested).toBe("auto");
+    expect(body.mode.degraded).toBe(false);
+    expect(Array.isArray(body.mode.reasons)).toBe(true);
+  });
 });

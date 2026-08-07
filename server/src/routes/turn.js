@@ -198,8 +198,10 @@ router.post("/open", async (req, res) => {
       const out = await tts.speak(result.coach_reply);
       audio = out.audio.toString("base64");
       audioFormat = out.format;
+      noteTTSOutcome(true);
     } catch (ttsErr) {
       console.warn("[turn/open] TTS failed → client will use browser voice:", ttsErr.message);
+      noteTTSOutcome(false);
     }
   }
 
