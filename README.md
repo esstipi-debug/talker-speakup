@@ -27,8 +27,10 @@ and multiple choice never puts you under time pressure. A human tutor does, but 
 they don't want to be rude.
 
 SpeakUp is the opposite trade: infinite patience, zero social cost, 3am availability, and a memory that
-never lets a mistake quietly become a habit. The transcript, the database, and the grammar pass never
-leave your machine. The audio doesn't stay local by default, though: today it's transcribed by the
+never lets a mistake quietly become a habit. Run locally — the default — and the transcript, the
+database, and the grammar pass never leave your machine. Deployed (see [Deploy](#deploy)), they live on
+the host instead; that trade is the price of reaching it from a phone. The audio doesn't stay local by
+default, though: today it's transcribed by the
 browser's speech service — Google's servers, on the Chrome path everyone is on — until M6 ships local
 Whisper via `voicebox`. See [Endpoints](#endpoints) for the dormant `/turn/audio` path that already
 exists for that.
@@ -271,6 +273,39 @@ docker run -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-cpu
 
 `GET /health` reports which providers actually came up. See `server/.env.example` for every knob.
 
+### Deploy
+
+One Railway service, connected to the GitHub repo, plus a Volume. The service serves the API **and**
+the built client from the same origin, so there is no CORS and no API base URL to inject.
+
+| Setting | Value |
+|---|---|
+| Build command | `npm run build` |
+| Start command | `npm start` |
+| Volume mount path | `/data` |
+
+Variables, in the Railway dashboard:
+
+```
+MISTRAL_API_KEY=sk-...
+TTS_PROVIDER=browser
+DATABASE_URL=file:/data/speakup.db
+```
+
+`PORT` is injected by Railway. `BRAIN_PROVIDER` is unnecessary — with the key present, auto-detection
+resolves Mistral on its own.
+
+`TTS_PROVIDER=browser` is deliberate: the phone already has voices, and a Kokoro container would mean
+a second service running CPU inference for a worse trade.
+
+**What a deployed instance is not:** it has no authentication, no accounts and no isolation. The URL
+is public, and anyone who finds it spends the API key and writes to the ledger. A spend limit on the
+Mistral account is the mitigation. Two devices on the same URL share one ledger.
+
+**The mic works on Chrome for Android** — Railway serves HTTPS, which both `getUserMedia` and Web
+Speech require. iOS routes every browser through WebKit, where continuous recognition is doubtful;
+the text input is still a first-class path there, but that is not speaking practice.
+
 ---
 
 ## Tests
@@ -329,10 +364,11 @@ Motion is compositor-only (`transform` / `opacity`) and every animation is disab
 
 ## Principles
 
-1. **Local-first, honestly scoped.** The transcript, the database, and the grammar pass stay on your
-   machine. The audio itself is transcribed via the browser's speech service (Google's, by default in
-   Chrome) until M6 ships local Whisper — see [Why this exists](#why-this-exists). The cloud brain is
-   opt-in and swappable for a local one.
+1. **Local-first, honestly scoped.** On a local run the transcript, the database, and the grammar
+   pass stay on your machine. A deployed instance moves all three onto the host — local-first is the
+   default, not a guarantee that survives being put on the internet. The audio itself is transcribed via
+   the browser's speech service (Google's, by default in Chrome) until M6 ships local Whisper — see
+   [Why this exists](#why-this-exists). The cloud brain is opt-in and swappable for a local one.
 2. **$0 by default.** Mock brain, browser voice, SQLite. Paying for a better model is an upgrade, never
    a requirement to start.
 3. **Degrade, never break.** TTS down → browser voice. No mic → text input. No key → mock brain.
