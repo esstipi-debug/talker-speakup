@@ -3,11 +3,16 @@
   "private": true,
   "version": "0.1.0",
   "description": "SpeakUp — personal local-first English speaking coach (M0 + M1)",
+  "engines": {
+    "node": ">=22"
+  },
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -n server,client -c magenta,cyan \"npm --prefix server run dev\" \"npm --prefix client run dev\"",
     "dev:server": "npm --prefix server run dev",
     "dev:client": "npm --prefix client run dev",
+    "build": "npm ci --prefix server && npm ci --prefix client && npm --prefix server run prisma:generate && npm --prefix client run build",
+    "start": "npm --prefix server run start",
     "test": "npm --prefix client test && npm --prefix server test",
     "install:all": "npm install && npm --prefix server install && npm --prefix client install",
     "prisma:migrate": "npm --prefix server run prisma:migrate",
