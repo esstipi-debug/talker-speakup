@@ -263,7 +263,7 @@ input — the fallback is a first-class path, not an afterthought.
 
 ### Modes
 
-The two configurations this project actually runs have names, and one command each:
+The three configurations this project actually runs have names, and one command each:
 
 ```bash
 npm run dev:hybrid
@@ -276,7 +276,7 @@ npm run dev:hybrid
 | `upgrades` channel | off | on | on |
 | needs | nothing | an API key | key + Docker on `:8880` |
 
-A mode sets defaults for two slots and nothing else — `stt`, `pron` and the seed sources stay independent env vars, and **an explicit env var always beats the mode**, so an existing `.env` keeps meaning what it meant.
+A mode sets defaults for two slots and nothing else — `stt`, `pron` and the seed sources stay independent env vars, and **an explicit env var always beats the mode**, so an existing `.env` keeps meaning what it meant. The `upgrades` row above follows whether `MISTRAL_API_KEY` is set, not the mode, so a leftover key still turns it on under `web`.
 
 Plain `npm run dev` is mode `auto`: exactly the pre-modes behaviour, which is Mistral if a key is present and Kokoro for the voice.
 
