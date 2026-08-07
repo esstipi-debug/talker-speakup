@@ -11,6 +11,7 @@ import { harperStatus } from "./feedback/harper.js";
 import { configuredFeeds } from "./seed/feeds.js";
 import { stats as topicStats } from "./repo/topics.js";
 import { mountClient } from "./static.js";
+import { modeStatus } from "./config/mode.js";
 
 /**
  * Builds the Express app but never listens — so tests can import it and bind
@@ -26,13 +27,16 @@ app.get("/health", async (_req, res) => {
   // Configuration and cache state, never reachability (spec §8) — no DB hit
   // at all when there's nothing configured to report on.
   const { cached, unused } = feedUrls.length > 0 ? await topicStats() : { cached: 0, unused: 0 };
+  const brain = currentProvider();
+  const tts = currentTTSProvider();
   res.json({
     status: "ok",
-    brain: currentProvider(),
-    tts: currentTTSProvider(),
+    brain,
+    tts,
     stt: currentSTTProvider(),
     pron: currentPronProvider(),
     feedback: harperStatus(),
+    mode: modeStatus({ brain, tts }),
     sources: { provider: feedUrls.length > 0 ? "feeds" : "local", feeds: feedUrls.length, cached, unused },
     ts: Date.now(),
   });

@@ -47,3 +47,13 @@ describe("POST /turn", () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe("GET /health — the mode block does not disturb the slots", () => {
+  it("still reports brain and tts as plain strings", async () => {
+    const res = await fetch(`${base}/health`);
+    const body = await res.json();
+    expect(typeof body.brain).toBe("string");
+    expect(typeof body.tts).toBe("string");
+    expect(body.mode.effective).not.toBe(undefined);
+  });
+});

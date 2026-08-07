@@ -1,5 +1,6 @@
 import { MockBrain } from "./mock.js";
 import { MistralBrain } from "./mistral.js";
+import { slotDefault } from "../config/mode.js";
 
 /**
  * Pluggable brain factory (handoff §6).
@@ -13,7 +14,7 @@ function resolveProvider() {
   const explicit = process.env.BRAIN_PROVIDER?.trim().toLowerCase();
   const hasMistralKey = !!process.env.MISTRAL_API_KEY?.trim();
 
-  let provider = explicit || (hasMistralKey ? "mistral" : "mock");
+  let provider = explicit || slotDefault("brain") || (hasMistralKey ? "mistral" : "mock");
 
   if (provider === "mistral" && !hasMistralKey) {
     console.warn("[brain] BRAIN_PROVIDER=mistral but MISTRAL_API_KEY is missing → falling back to mock.");
