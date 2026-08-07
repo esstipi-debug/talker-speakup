@@ -4,13 +4,13 @@
 
 # SpeakUp
 
-**An English speaking coach that lives on `localhost`.**
+**An English speaking coach that lives on `localhost` — or on a host you control.**
 You talk. It listens, answers out loud, and — milestone by milestone — starts remembering exactly how you get it wrong.
 
 ![status](https://img.shields.io/badge/status-M2%20shipped%20·%20M7%20in%20progress-8b6cff?style=flat-square)
-![local first](https://img.shields.io/badge/local--first-no%20account%2C%20no%20server%20lock--in-2ee6a6?style=flat-square)
+![local first](https://img.shields.io/badge/local--first%20by%20default-no%20lock--in-2ee6a6?style=flat-square)
 ![stack](https://img.shields.io/badge/React%2019%20·%20Express%205%20·%20Prisma-15101f?style=flat-square)
-![tests](https://img.shields.io/badge/tests-398%20passing-ffb35c?style=flat-square)
+![tests](https://img.shields.io/badge/tests-413%20passing-ffb35c?style=flat-square)
 
 </div>
 
@@ -298,9 +298,13 @@ resolves Mistral on its own.
 `TTS_PROVIDER=browser` is deliberate: the phone already has voices, and a Kokoro container would mean
 a second service running CPU inference for a worse trade.
 
+`railway.json` at the repo root pins the build and start commands in the repo, so the dashboard
+settings above are a fallback rather than the source of truth.
+
 **What a deployed instance is not:** it has no authentication, no accounts and no isolation. The URL
 is public, and anyone who finds it spends the API key and writes to the ledger. A spend limit on the
-Mistral account is the mitigation. Two devices on the same URL share one ledger.
+Mistral account bounds that bill — but Railway bills by usage too, so the same URL is a second meter,
+and it wants its own usage limit. Two devices on the same URL share one ledger.
 
 **The mic works on Chrome for Android** — Railway serves HTTPS, which both `getUserMedia` and Web
 Speech require. iOS routes every browser through WebKit, where continuous recognition is doubtful;
@@ -310,7 +314,7 @@ the text input is still a first-class path there, but that is not speaking pract
 
 ## Tests
 
-**281 tests** — 183 on the client (Vitest + Testing Library + jsdom) and 98 on the server (Vitest, node
+**413 tests** — 210 on the client (Vitest + Testing Library + jsdom) and 203 on the server (Vitest, node
 environment, binding port 0 so they never collide with a running dev server). Coverage is gated at 80%
 on four metrics for the files where the bodies are buried: `useConversation.js`, `speech.js`,
 `micStream.js`, `lib/prosody/**` on the client, and `server/src/feedback/**` + `server/src/metrics/**`

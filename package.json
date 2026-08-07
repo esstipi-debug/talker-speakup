@@ -11,7 +11,7 @@
     "dev": "concurrently -k -n server,client -c magenta,cyan \"npm --prefix server run dev\" \"npm --prefix client run dev\"",
     "dev:server": "npm --prefix server run dev",
     "dev:client": "npm --prefix client run dev",
-    "build": "npm ci --prefix server && npm ci --prefix client && npm --prefix server run prisma:generate && npm --prefix client run build",
+    "build": "npm ci --include=dev --prefix server && npm ci --include=dev --prefix client && npm --prefix server run prisma:generate && npm --prefix client run build",
     "start": "npm --prefix server run start",
     "test": "npm --prefix client test && npm --prefix server test",
     "install:all": "npm install && npm --prefix server install && npm --prefix client install",
