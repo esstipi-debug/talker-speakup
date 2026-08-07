@@ -181,4 +181,13 @@ describe("modeStatus — degradation", () => {
     expect(s.degraded).toBe(false);
     expect(s.reasons).toEqual([]);
   });
+
+  it("still reports the truth under auto: a dead server voice reads as cloud", () => {
+    noteTTSOutcome(false);
+    const s = modeStatus({ brain: "mistral", tts: "kokoro" });
+    expect(s.requested).toBe("auto");
+    expect(s.effective).toBe("cloud");
+    expect(s.degraded).toBe(false);
+    expect(s.reasons).toEqual([]);
+  });
 });

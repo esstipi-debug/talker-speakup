@@ -70,14 +70,21 @@ export function modeStatus({ brain, tts }) {
 
   if (wanted.brain === "mistral" && brain !== "mistral") reasons.push("missing-mistral-key");
 
-  // auto asked for nothing, so an unreachable voice cannot disappoint it —
-  // matches the spec's "auto degrades to nothing" rule for the brain check.
-  const ttsUnreachable = requested !== "auto" && SERVER_SIDE_TTS.includes(tts) && _ttsReachable === false;
-  if (ttsUnreachable) reasons.push("tts-unreachable");
+  // The fact, independent of what was asked for: is the configured server
+  // voice actually dead right now? This must hold under auto exactly as
+  // under hybrid — the pill must never claim a voice is speaking when the
+  // browser is the one actually doing it.
+  const serverVoiceDead = SERVER_SIDE_TTS.includes(tts) && _ttsReachable === false;
 
-  // What the learner actually gets: an unreachable server voice means the
-  // client is speaking, so the effective voice is the browser's.
-  const effectiveTts = ttsUnreachable ? "browser" : tts;
+  // Whether that fact is a broken promise depends on what was requested:
+  // auto asked for nothing, so it cannot be disappointed (same rule the
+  // brain check gets for free from MODES.auto having no brain key). This
+  // gate applies only to the *reason*, never to effectiveTts below.
+  if (requested !== "auto" && serverVoiceDead) reasons.push("tts-unreachable");
+
+  // What the learner actually gets: a dead server voice means the client is
+  // speaking, so the effective voice is the browser's — unconditionally.
+  const effectiveTts = serverVoiceDead ? "browser" : tts;
 
   return {
     requested,
