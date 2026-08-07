@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { StrictMode } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 
@@ -58,6 +58,7 @@ import { playAudio, speak, stopSpeaking } from "../lib/speech.js";
 import { useConversation } from "./useConversation.js";
 
 beforeEach(() => {
+  getHealth.mockReset();
   getHealth.mockResolvedValue({ brain: "mock", tts: "kokoro", stt: "none" });
   postTurn.mockReset();
   postFeedback.mockReset();
@@ -1029,5 +1030,77 @@ describe("the coach opens the session", () => {
     await waitFor(() => expect(result.current.status).toBe("idle"));
     await act(async () => { await result.current.submitText("again"); });
     expect(postTurn.mock.calls[1][0].sessionId).toBe("s-turn");
+  });
+});
+
+describe("mode refresh", () => {
+  const HYBRID = { requested: "hybrid", effective: "hybrid", degraded: false, reasons: [] };
+  const healthWith = (mode, tts = "kokoro") => ({ brain: "mistral", tts, stt: "none", mode });
+
+  // The module mock's playAudio never ends playback, which parks the status at
+  // "speaking" and makes a second submitText a no-op. Tests that need two turns
+  // with audio install this instead.
+  const endsImmediately = (_audio, opts) => {
+    opts?.onEnd?.();
+    return { pause: vi.fn() };
+  };
+
+  afterEach(() => {
+    playAudio.mockImplementation(() => ({ pause: vi.fn() }));
+  });
+
+  it("carries the mode from /health into providers", async () => {
+    getHealth.mockResolvedValue(healthWith(HYBRID));
+    const { result } = renderHook(() => useConversation());
+    await waitFor(() => expect(result.current.providers.mode).toMatchObject({ effective: "hybrid" }));
+  });
+
+  it("re-fetches /health when a turn that expected audio did not get any", async () => {
+    getHealth.mockResolvedValue(healthWith(HYBRID));
+    postTurn.mockResolvedValue({ coach_reply: "ok", xp: 5, audio: null, ttsProvider: "kokoro" });
+    const { result } = renderHook(() => useConversation());
+    await waitFor(() => expect(result.current.providers.tts).toBe("kokoro"));
+    expect(getHealth).toHaveBeenCalledTimes(1);
+
+    await act(async () => { await result.current.submitText("hello"); });
+    await waitFor(() => expect(getHealth).toHaveBeenCalledTimes(2));
+  });
+
+  it("does not re-fetch while the audio expectation keeps being met", async () => {
+    getHealth.mockResolvedValue(healthWith(HYBRID));
+    playAudio.mockImplementation(endsImmediately);
+    postTurn.mockResolvedValue({ coach_reply: "ok", xp: 5, audio: "AAAA", audioFormat: "mp3", ttsProvider: "kokoro" });
+    const { result } = renderHook(() => useConversation());
+    await waitFor(() => expect(result.current.providers.tts).toBe("kokoro"));
+
+    await act(async () => { await result.current.submitText("first"); });
+    await act(async () => { await result.current.submitText("second"); });
+    expect(getHealth).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-fetches again when audio comes back after a failure", async () => {
+    getHealth.mockResolvedValue(healthWith(HYBRID));
+    playAudio.mockImplementation(endsImmediately);
+    postTurn
+      .mockResolvedValueOnce({ coach_reply: "ok", xp: 5, audio: null, ttsProvider: "kokoro" })
+      .mockResolvedValueOnce({ coach_reply: "ok", xp: 5, audio: "AAAA", audioFormat: "mp3", ttsProvider: "kokoro" });
+    const { result } = renderHook(() => useConversation());
+    await waitFor(() => expect(result.current.providers.tts).toBe("kokoro"));
+
+    await act(async () => { await result.current.submitText("first"); });
+    await act(async () => { await result.current.submitText("second"); });
+    await waitFor(() => expect(getHealth).toHaveBeenCalledTimes(3));
+  });
+
+  it("never re-fetches when the server never intended to send audio", async () => {
+    const cloud = { requested: "cloud", effective: "cloud", degraded: false, reasons: [] };
+    getHealth.mockResolvedValue(healthWith(cloud, "browser"));
+    postTurn.mockResolvedValue({ coach_reply: "ok", xp: 5, audio: null, ttsProvider: "browser" });
+    const { result } = renderHook(() => useConversation());
+    await waitFor(() => expect(result.current.providers.tts).toBe("browser"));
+
+    await act(async () => { await result.current.submitText("first"); });
+    await act(async () => { await result.current.submitText("second"); });
+    expect(getHealth).toHaveBeenCalledTimes(1);
   });
 });

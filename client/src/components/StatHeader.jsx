@@ -1,6 +1,24 @@
 const XP_PER_LEVEL = 100;
 
-export default function StatHeader({ totalXp = 0, turns = 0, sessionFluency = null, brain, tts, stt, onTogglePatterns, patternsOpen = false }) {
+const REASON_TEXT = {
+  "missing-mistral-key": "no Mistral API key",
+  "tts-unreachable": "TTS unreachable",
+};
+
+/**
+ * The whole story in one string, because it is also the accessible name:
+ * colour alone must never be the thing that says "degraded".
+ */
+function modeLabel(mode) {
+  let label = `mode ${mode.effective}`;
+  if (mode.requested !== mode.effective) label += `, requested ${mode.requested}`;
+  if (mode.degraded && mode.reasons.length > 0) {
+    label += `, degraded: ${mode.reasons.map((r) => REASON_TEXT[r] ?? r).join(", ")}`;
+  }
+  return label;
+}
+
+export default function StatHeader({ totalXp = 0, turns = 0, sessionFluency = null, brain, tts, stt, mode, onTogglePatterns, patternsOpen = false }) {
   const level = Math.floor(totalXp / XP_PER_LEVEL) + 1;
   const xpInLevel = totalXp % XP_PER_LEVEL;
   const pct = Math.round((xpInLevel / XP_PER_LEVEL) * 100);
@@ -57,6 +75,19 @@ export default function StatHeader({ totalXp = 0, turns = 0, sessionFluency = nu
         )}
         <Stat label="turns" value={turns} />
         <div className="flex flex-col items-end gap-1">
+          {mode && (
+            <span
+              aria-label={modeLabel(mode)}
+              title={modeLabel(mode)}
+              className={`text-[10px] uppercase tracking-wide px-2 py-1 rounded-full border ${
+                mode.degraded
+                  ? "border-user/60 text-user"
+                  : "border-coach/50 text-coach-soft"
+              }`}
+            >
+              {mode.degraded ? `${mode.effective} !` : mode.effective}
+            </span>
+          )}
           {brain && (
             <span
               title="active LLM brain"

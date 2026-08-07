@@ -83,6 +83,10 @@ export function useConversation() {
   // see the comment on the mount effect below for why that request would
   // otherwise be a live, server-committing POST rather than a harmless GET.
   const openRequestedRef = useRef(false);
+  // Tracks whether the last turn expected server audio and did not get it.
+  // A refresh fires only when this flips, so a healthy session makes no extra
+  // requests and a recovered TTS clears the pill on its own.
+  const ttsFailedRef = useRef(false);
   // True whenever the hook is "really" mounted right now. Set true at the top
   // of every effect invocation (including StrictMode's replay) and false in
   // the cleanup; a genuine unmount leaves it false because no further mount
@@ -119,7 +123,7 @@ export function useConversation() {
   useEffect(() => {
     warmUpVoices();
     getHealth().then((h) => {
-      if (h) setProviders({ brain: h.brain, tts: h.tts, stt: h.stt });
+      if (h) setProviders({ brain: h.brain, tts: h.tts, stt: h.stt, mode: h.mode });
     });
 
     // The coach speaks first. The local GREETING stays as the fallback rather
@@ -216,7 +220,7 @@ export function useConversation() {
     const prosody = lastTurnProsodyRef.current;
     const captureSettings = getCaptureSettings();
     try {
-      const { coach_reply, xp, audio, audioFormat, sessionId, turnId, probe } = await postTurn({
+      const { coach_reply, xp, audio, audioFormat, sessionId, turnId, probe, ttsProvider } = await postTurn({
         utterance,
         history: toWireHistory([...historyBefore, userMsg]),
         sessionId: sessionIdRef.current,
@@ -244,6 +248,14 @@ export function useConversation() {
       }
       setMessages((prev) => [...prev, { id: nextMsgIdRef.current++, role: "coach", text: coach_reply, audio, audioFormat }]);
       if (typeof xp === "number") setTotalXp((v) => v + xp);
+
+      const failed = ttsProvider !== "browser" && !audio;
+      if (failed !== ttsFailedRef.current) {
+        ttsFailedRef.current = failed;
+        getHealth().then((h) => {
+          if (h) setProviders({ brain: h.brain, tts: h.tts, stt: h.stt, mode: h.mode });
+        });
+      }
 
       const expectedServerVoice = providersRef.current.tts && providersRef.current.tts !== "browser";
       if (!audio && expectedServerVoice) setTtsFallbackActive(true);
