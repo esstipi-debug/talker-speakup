@@ -77,6 +77,7 @@ export default function StatHeader({ totalXp = 0, turns = 0, sessionFluency = nu
         <div className="flex flex-col items-end gap-1">
           {mode && (
             <span
+              role="img"
               aria-label={modeLabel(mode)}
               title={modeLabel(mode)}
               className={`text-[10px] uppercase tracking-wide px-2 py-1 rounded-full border ${

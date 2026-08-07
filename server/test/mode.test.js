@@ -58,6 +58,13 @@ describe("resolveMode", () => {
     process.argv = ["node", "src/index.js", "--mode=  HYBRID  "];
     expect(resolveMode()).toBe("hybrid");
   });
+
+  it("lets a later --mode= flag win over an earlier one on the same argv", () => {
+    // `npm run dev:hybrid -- --mode=web` appends its own flag after the
+    // script's `--mode=hybrid`; CLI convention is last-wins.
+    process.argv = ["node", "src/index.js", "--mode=hybrid", "--mode=web"];
+    expect(resolveMode()).toBe("web");
+  });
 });
 
 describe("slotDefault", () => {
@@ -103,6 +110,13 @@ describe("modeStatus — effective name", () => {
 
   it("never names the pair auto", () => {
     expect(modeStatus({ brain: "mistral", tts: "kokoro" }).effective).not.toBe("auto");
+  });
+
+  it("treats an unrecognised tts value as browser for the effective name", () => {
+    // getTTS() returns null (and the browser speaks) for anything that isn't
+    // kokoro/voicebox — a typo like "kokoru" must read as the mode that's
+    // actually speaking, not "custom".
+    expect(modeStatus({ brain: "mock", tts: "kokoru" }).effective).toBe("web");
   });
 });
 

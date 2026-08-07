@@ -1049,6 +1049,15 @@ describe("mode refresh", () => {
     playAudio.mockImplementation(() => ({ pause: vi.fn() }));
   });
 
+  it("re-fetches /health when the OPENER expected audio and did not get any", async () => {
+    getHealth.mockResolvedValue(healthWith(HYBRID));
+    postTurnOpen.mockResolvedValue({ coach_reply: "hi", ttsProvider: "kokoro", audio: null });
+    renderHook(() => useConversation());
+    // Once at mount, once from the opener's own tts-failure edge — before the
+    // learner has sent a single turn.
+    await waitFor(() => expect(getHealth).toHaveBeenCalledTimes(2));
+  });
+
   it("carries the mode from /health into providers", async () => {
     getHealth.mockResolvedValue(healthWith(HYBRID));
     const { result } = renderHook(() => useConversation());

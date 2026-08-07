@@ -10,7 +10,7 @@ You talk. It listens, answers out loud, and — milestone by milestone — start
 ![status](https://img.shields.io/badge/status-M2%20shipped%20·%20M7%20in%20progress-8b6cff?style=flat-square)
 ![local first](https://img.shields.io/badge/local--first%20by%20default-no%20lock--in-2ee6a6?style=flat-square)
 ![stack](https://img.shields.io/badge/React%2019%20·%20Express%205%20·%20Prisma-15101f?style=flat-square)
-![tests](https://img.shields.io/badge/tests-413%20passing-ffb35c?style=flat-square)
+![tests](https://img.shields.io/badge/tests-461%20passing-ffb35c?style=flat-square)
 
 </div>
 
@@ -276,11 +276,11 @@ npm run dev:hybrid
 | `upgrades` channel | off | on | on |
 | needs | nothing | an API key | key + Docker on `:8880` |
 
-A mode sets defaults for two slots and nothing else — `stt`, `pron` and the seed sources stay independent env vars, and **an explicit env var always beats the mode**, so an existing `.env` keeps meaning what it meant. The `upgrades` row above follows whether `MISTRAL_API_KEY` is set, not the mode, so a leftover key still turns it on under `web`.
+A mode sets defaults for two slots and nothing else — `stt`, `pron` and the seed sources stay independent env vars, and **an explicit env var always beats the mode**, so an existing `.env` keeps meaning what it meant. The `upgrades` row above follows whether `MISTRAL_API_KEY` is set, not the mode, so a leftover key still turns it on under `web`. If your `server/.env` predates modes it likely has `TTS_PROVIDER=kokoro` uncommented, which will beat every mode's voice default the same way — the pill reading `custom` instead of the mode you picked is the symptom; comment that line out to let the mode choose.
 
 Plain `npm run dev` is mode `auto`: exactly the pre-modes behaviour, which is Mistral if a key is present and Kokoro for the voice.
 
-`GET /health` reports the mode you asked for **and** the one you got, because they can differ. Ask for `hybrid` with no key and you get the mock brain; ask for it with Kokoro down and the coach speaks in the browser's voice from the first failed turn until one succeeds. The header pill shows the mode you are actually in, marked when it is not the one you requested.
+`GET /health` reports the mode you asked for **and** the one you got, because they can differ. Ask for `hybrid` with no key and you get the mock brain; ask for it with Kokoro down and the coach speaks in the browser's voice from the first failed turn until one succeeds. The header pill shows the mode you are actually in, marked when it is degraded — not merely whenever it differs from the one you requested.
 
 ### Turning on the good stuff
 
@@ -290,7 +290,7 @@ echo "MISTRAL_API_KEY=sk-..." >> server/.env      # auto-detected on restart
 
 # a real voice (Kokoro, local, free)
 docker run -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-cpu
-# server/.env already defaults to TTS_PROVIDER=kokoro
+# TTS_PROVIDER resolves to kokoro when unset — no change needed in server/.env
 ```
 
 `GET /health` reports which providers actually came up. See `server/.env.example` for every knob.
@@ -336,7 +336,7 @@ the text input is still a first-class path there, but that is not speaking pract
 
 ## Tests
 
-**413 tests** — 210 on the client (Vitest + Testing Library + jsdom) and 203 on the server (Vitest, node
+**461 tests** — 223 on the client (Vitest + Testing Library + jsdom) and 238 on the server (Vitest, node
 environment, binding port 0 so they never collide with a running dev server). Coverage is gated at 80%
 on four metrics for the files where the bodies are buried: `useConversation.js`, `speech.js`,
 `micStream.js`, `lib/prosody/**` on the client, and `server/src/feedback/**` + `server/src/metrics/**`

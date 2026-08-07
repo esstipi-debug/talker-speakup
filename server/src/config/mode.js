@@ -22,7 +22,9 @@ let _mode = null;
 let _ttsReachable = null;
 
 function parseMode() {
-  const flag = process.argv.find((arg) => arg.startsWith("--mode="));
+  // findLast, not find: `npm run dev:hybrid -- --mode=web` appends its own
+  // flag after the script's `--mode=hybrid`, and CLI convention is last-wins.
+  const flag = process.argv.findLast((arg) => arg.startsWith("--mode="));
   const raw = (flag ? flag.slice("--mode=".length) : process.env.SPEAKUP_MODE ?? "").trim().toLowerCase();
 
   if (!raw) return "auto";
@@ -82,9 +84,17 @@ export function modeStatus({ brain, tts }) {
   // gate applies only to the *reason*, never to effectiveTts below.
   if (requested !== "auto" && serverVoiceDead) reasons.push("tts-unreachable");
 
-  // What the learner actually gets: a dead server voice means the client is
-  // speaking, so the effective voice is the browser's — unconditionally.
-  const effectiveTts = serverVoiceDead ? "browser" : tts;
+  // An unrecognised TTS_PROVIDER (a typo, a removed value) is neither a known
+  // server-side voice nor "browser" itself — but getTTS() returns null for it,
+  // so the browser is what's actually speaking. Treat it the same as a dead
+  // server voice for the purpose of naming the effective mode; /health's own
+  // top-level `tts` field is untouched and keeps reporting the raw value.
+  const knownTts = SERVER_SIDE_TTS.includes(tts) || tts === "browser";
+
+  // What the learner actually gets: a dead server voice, or an unrecognised
+  // one, means the client is speaking, so the effective voice is the
+  // browser's — unconditionally.
+  const effectiveTts = serverVoiceDead || !knownTts ? "browser" : tts;
 
   return {
     requested,

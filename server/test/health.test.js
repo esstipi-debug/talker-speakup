@@ -54,6 +54,6 @@ describe("GET /health — the mode block does not disturb the slots", () => {
     const body = await res.json();
     expect(typeof body.brain).toBe("string");
     expect(typeof body.tts).toBe("string");
-    expect(["auto", "web", "cloud", "hybrid", "custom"]).toContain(body.mode.effective);
+    expect(["web", "cloud", "hybrid", "custom"]).toContain(body.mode.effective);
   });
 });

@@ -46,17 +46,17 @@ describe("the mode pill", () => {
 
   it("names the effective mode", () => {
     render(<StatHeader totalXp={0} turns={0} mode={{ requested: "hybrid", effective: "hybrid", degraded: false, reasons: [] }} />);
-    expect(screen.getByLabelText("mode hybrid")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "mode hybrid" })).toBeInTheDocument();
   });
 
   it("names the requested mode too when they differ by choice", () => {
     render(<StatHeader totalXp={0} turns={0} mode={{ requested: "hybrid", effective: "cloud", degraded: false, reasons: [] }} />);
-    expect(screen.getByLabelText("mode cloud, requested hybrid")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "mode cloud, requested hybrid" })).toBeInTheDocument();
   });
 
   it("puts the degradation reason in the accessible name, not only in colour", () => {
     render(<StatHeader totalXp={0} turns={0} mode={{ requested: "hybrid", effective: "cloud", degraded: true, reasons: ["tts-unreachable"] }} />);
-    expect(screen.getByLabelText("mode cloud, requested hybrid, degraded: TTS unreachable")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "mode cloud, requested hybrid, degraded: TTS unreachable" })).toBeInTheDocument();
   });
 
   it("spells out both reasons when both hold", () => {
@@ -67,11 +67,11 @@ describe("the mode pill", () => {
         mode={{ requested: "hybrid", effective: "web", degraded: true, reasons: ["missing-mistral-key", "tts-unreachable"] }}
       />,
     );
-    expect(screen.getByLabelText("mode web, requested hybrid, degraded: no Mistral API key, TTS unreachable")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "mode web, requested hybrid, degraded: no Mistral API key, TTS unreachable" })).toBeInTheDocument();
   });
 
   it("renders an unrecognised reason verbatim rather than dropping it", () => {
     render(<StatHeader totalXp={0} turns={0} mode={{ requested: "hybrid", effective: "custom", degraded: true, reasons: ["something-new"] }} />);
-    expect(screen.getByLabelText("mode custom, requested hybrid, degraded: something-new")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "mode custom, requested hybrid, degraded: something-new" })).toBeInTheDocument();
   });
 });

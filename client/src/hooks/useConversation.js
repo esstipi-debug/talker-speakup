@@ -44,6 +44,11 @@ function countSyllables(text) {
   return text.toLowerCase().match(/[aeiouy]+/g)?.length ?? 0;
 }
 
+/** A server-side voice was expected but no audio came back. */
+function ttsFailed(ttsProvider, audio) {
+  return ttsProvider !== "browser" && !audio;
+}
+
 /**
  * Owns the whole conversation loop: providers, the turn round-trip, a single
  * playback controller for the coach voice, and the speech capture state
@@ -120,6 +125,22 @@ export function useConversation() {
   useEffect(() => { messagesRef.current = messages; }, [messages]);
   useEffect(() => { providersRef.current = providers; }, [providers]);
 
+  // Shared by the opener response and every turn response (spec: same edge
+  // logic both places, not a second copy of it). A refresh fires only when
+  // the tts-failure edge actually flips, so a healthy session makes no extra
+  // requests and a recovered TTS clears the pill on its own. isMountedRef
+  // guards against applying a response after a real unmount — the same guard
+  // the surrounding opener logic already uses.
+  function refreshHealthOnTtsEdge(ttsProvider, audio) {
+    const failed = ttsFailed(ttsProvider, audio);
+    if (failed === ttsFailedRef.current) return;
+    ttsFailedRef.current = failed;
+    getHealth().then((h) => {
+      if (!isMountedRef.current || !h) return;
+      setProviders({ brain: h.brain, tts: h.tts, stt: h.stt, mode: h.mode });
+    });
+  }
+
   useEffect(() => {
     warmUpVoices();
     getHealth().then((h) => {
@@ -150,6 +171,11 @@ export function useConversation() {
       openRequestedRef.current = true;
       postTurnOpen({ sessionId: sessionIdRef.current }).then((opening) => {
         if (!isMountedRef.current || !opening?.coach_reply) return;
+        // The opener's TTS failure must reach the pill before the first real
+        // turn — otherwise the pill reads a clean mode during exactly the
+        // window where it's the only thing on screen (spec: same edge logic
+        // the turn path already gets).
+        refreshHealthOnTtsEdge(opening.ttsProvider, opening.audio);
         // The opener may only replace the transcript if the learner hasn't
         // already acted while it was in flight. A slow opener racing a fast
         // learner reply would otherwise wipe out a turn already sent to the
@@ -249,13 +275,7 @@ export function useConversation() {
       setMessages((prev) => [...prev, { id: nextMsgIdRef.current++, role: "coach", text: coach_reply, audio, audioFormat }]);
       if (typeof xp === "number") setTotalXp((v) => v + xp);
 
-      const failed = ttsProvider !== "browser" && !audio;
-      if (failed !== ttsFailedRef.current) {
-        ttsFailedRef.current = failed;
-        getHealth().then((h) => {
-          if (h) setProviders({ brain: h.brain, tts: h.tts, stt: h.stt, mode: h.mode });
-        });
-      }
+      refreshHealthOnTtsEdge(ttsProvider, audio);
 
       const expectedServerVoice = providersRef.current.tts && providersRef.current.tts !== "browser";
       if (!audio && expectedServerVoice) setTtsFallbackActive(true);
