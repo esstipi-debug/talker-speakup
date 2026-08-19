@@ -56,9 +56,16 @@ export async function buildFeedback({ utterance, history = [], prosody = null, s
     // mistake. "I have 30 years" is the same habit whether Harper flags it or
     // the LLM does; keying it by the finding pass would file one habit under
     // two rows and split its frequency. `kind` stays the display/type field.
-    .map((c) => ({ ...c, pattern: toPattern("grammar", c.original) }));
+    //
+    // The key is the transformation, span AND fix (see pattern.js): Harper's
+    // problem text is routinely one word, so keying on it alone made
+    // `grammar:go` a bucket for every unrelated mistake spelled "go". That
+    // narrows the decoupling above rather than removing it — the two passes
+    // agree on the row when they agree on the fix, and the prompt already
+    // tells the LLM not to re-report what Harper found.
+    .map((c) => ({ ...c, pattern: toPattern("grammar", c.original, c.suggestion) }));
 
-  const upgrades = llm.upgrades.map((u) => ({ ...u, pattern: toPattern("vocab", u.original) }));
+  const upgrades = llm.upgrades.map((u) => ({ ...u, pattern: toPattern("vocab", u.original, u.upgraded) }));
 
   const frequencies = await safeFrequencies([...corrections, ...upgrades].map((x) => x.pattern));
   const byFrequency = (a, b) => (frequencies.get(b.pattern)?.frequency ?? 0) - (frequencies.get(a.pattern)?.frequency ?? 0);

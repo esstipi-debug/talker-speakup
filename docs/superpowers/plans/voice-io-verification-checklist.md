@@ -73,10 +73,26 @@ assumption, so it belongs on record here, not lost with the branch's scratch dir
       transitions built on probes the learner was visibly dodging.
 - [ ] Record the pass/fail judgment per turn here (or link to where it's recorded) once run.
 - [ ] Once real sessions exist, answer spec §11's two calibration questions against real ledger rows:
-      does anything ever become probeable (`frequency >= MIN_PROBE_FREQUENCY` needs three sightings of
-      the *same* four-token opening), and does anything ever resolve (three passes at one probe per
-      three turns is roughly 27 turns per pattern)? Both were unanswerable at design time because the
-      ledger was empty (spec §1, §11).
+      does anything ever become probeable (`frequency >= MIN_PROBE_FREQUENCY`), and does anything ever
+      resolve (three passes at one probe per three turns is roughly 27 turns per pattern)? Both were
+      unanswerable at design time because the ledger was empty (spec §1, §11).
+
+> **2026-08-19 — the ledger is still empty, and the key was wrong.** Ran the cheap gate: both `dev.db`
+> files hold **zero** sessions, turns and ledger rows, so neither §11 question is answerable yet. The
+> gate did settle a third thing it was not asked. The probeability estimate above used to read *"three
+> sightings of the same four-token opening"*, which made the `frequency >= 3` bar sound hard to reach.
+> It was not: `toPattern` is handed a correction's `original` — the error **span** — and Harper's spans
+> are routinely one word, so the real key was `grammar:go`, reached `frequency = 4` in four turns, and
+> pooled every unrelated mistake spelled "go" into one row whose single `example` fed the probe
+> directive. The key is now the transformation, `span>fix` (`grammar:go>goes`), which merges *he go* /
+> *she go* and separates `go>goes` from `go>went`. Rows written before this date never match again and
+> age out — the ledger was empty, so nothing was lost.
+>
+> Also measured, and it belongs with the M2 hand evaluation below rather than here: Harper flagged 4 of
+> 9 planted Spanish-L2 errors. It caught `he go`, `I has`, `we was`, `they is`; it missed **`I am agree
+> with you`**, `she dont like`, `the childs is`, `the childrens go`, and `my brother go`. Nine sentences
+> is not a recall rate, but the misses are subject-verb agreement across a noun phrase and the single
+> most characteristic error of the target learner.
 
 ## M2 → M4 handover notes
 

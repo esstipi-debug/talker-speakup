@@ -54,9 +54,34 @@ describe("buildFeedback", () => {
   it("orders by the learner's historical frequency, not by discovery order", async () => {
     lintUtterance.mockResolvedValue([finding("the people is"), finding("I have 30 years")]);
     const { toPattern } = await import("../src/feedback/pattern.js");
-    getFrequencies.mockResolvedValue(new Map([[toPattern("grammar", "I have 30 years"), { frequency: 9, status: "active" }]]));
+    getFrequencies.mockResolvedValue(new Map([[toPattern("grammar", "I have 30 years", "x"), { frequency: 9, status: "active" }]]));
     const out = await buildFeedback({ utterance: UTTERANCE });
     expect(out.corrections[0].original).toBe("I have 30 years");
+  });
+
+  // The ledger key is the transformation, not the span: Harper's problem text
+  // is often a single word, and keying on it alone filed unrelated mistakes
+  // that happen to share that word into one row.
+  it("keys a correction by its suggestion too, so one span with two fixes is two habits", async () => {
+    lintUtterance.mockResolvedValue([
+      { span: [0, 2], original: "go", suggestion: "goes", message: "m", lintKind: "Agreement", source: "harper" },
+      { span: [0, 2], original: "go", suggestion: "went", message: "m", lintKind: "Agreement", source: "harper" },
+    ]);
+    await buildFeedback({ utterance: "go" });
+    const written = recordFindings.mock.calls[0][0].map((e) => e.pattern);
+    expect(new Set(written).size).toBe(2);
+  });
+
+  it("keys an upgrade by the phrasing it proposes", async () => {
+    lintUtterance.mockResolvedValue([]);
+    requestUpgrades.mockResolvedValue({
+      status: "ok",
+      upgrades: [{ original: "I make a party", upgraded: "I'm throwing a party", why: "a" }],
+      extraCorrections: [],
+    });
+    const { toPattern } = await import("../src/feedback/pattern.js");
+    const out = await buildFeedback({ utterance: UTTERANCE });
+    expect(out.upgrades[0].pattern).toBe(toPattern("vocab", "I make a party", "I'm throwing a party"));
   });
 
   it("reports pass status honestly", async () => {
@@ -118,8 +143,16 @@ describe("buildFeedback", () => {
   // this project's target population; Harper is measured to miss it, so the
   // LLM pass catches it — and if the key carried the finding pass, one habit
   // would sit in two rows with its frequency split between them.
+  // Same mistake AND same fix — the pass that found it must not decide the row.
+  //
+  // Narrower than it was before the key became the transformation: two passes
+  // proposing DIFFERENT wording for one mistake now split into two rows. The
+  // upgrades prompt makes that rare by construction (it is handed Harper's
+  // findings and told not to repeat them), and the cost is a split frequency
+  // — the same cost the old span-only key paid on every one-word span, only
+  // far less often.
   it("keys the ledger identically whether a mistake is found by Harper or by the LLM", async () => {
-    lintUtterance.mockResolvedValue([finding("I have 30 years")]);
+    lintUtterance.mockResolvedValue([{ ...finding("I have 30 years"), suggestion: "I'm 30" }]);
     const viaHarper = await buildFeedback({ utterance: UTTERANCE });
 
     lintUtterance.mockResolvedValue([]);
