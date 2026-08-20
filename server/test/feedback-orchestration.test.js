@@ -84,6 +84,28 @@ describe("buildFeedback", () => {
     expect(out.upgrades[0].pattern).toBe(toPattern("vocab", "I make a party", "I'm throwing a party"));
   });
 
+  // `example` is what buildDirective quotes back to the model and what
+  // PatternsPanel renders to the learner. Harper's `original` is the error
+  // span — routinely one word — so both surfaces were being handed "go".
+  it("records the whole utterance as a correction's example, not the error span", async () => {
+    lintUtterance.mockResolvedValue([
+      { span: [3, 5], original: "go", suggestion: "goes", message: "m", lintKind: "Agreement", source: "harper" },
+    ]);
+    await buildFeedback({ utterance: "He go to the office every morning." });
+    expect(recordFindings.mock.calls[0][0][0].example).toBe("He go to the office every morning.");
+  });
+
+  it("records the whole utterance as an upgrade's example too", async () => {
+    lintUtterance.mockResolvedValue([]);
+    requestUpgrades.mockResolvedValue({
+      status: "ok",
+      upgrades: [{ original: "I make a party", upgraded: "I'm throwing a party", why: "a" }],
+      extraCorrections: [],
+    });
+    await buildFeedback({ utterance: UTTERANCE });
+    expect(recordFindings.mock.calls[0][0][0].example).toBe(UTTERANCE);
+  });
+
   it("reports pass status honestly", async () => {
     lintUtterance.mockResolvedValue([]);
     requestUpgrades.mockResolvedValue({ status: "skipped", upgrades: [], extraCorrections: [] });
