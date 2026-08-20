@@ -84,8 +84,14 @@ export async function buildFeedback({ utterance, history = [], prosody = null, s
   // Everything found is written, including what the cap hides. The cap limits
   // what the learner sees, not what the system knows.
   await safeRecord([
-    ...uniqueCorrections.map((c) => ({ pattern: c.pattern, type: c.kind, example: c.original, explanation: c.message })),
-    ...uniqueUpgrades.map((u) => ({ pattern: u.pattern, type: "vocab", example: u.original, explanation: u.why })),
+    // `example` is the whole utterance, never the finding's span. It is what
+    // coach/probe.js quotes back to the model to build a natural opening, and
+    // what PatternsPanel shows the learner. A span is routinely one word —
+    // "They previously said something like: \"go\"" directs nothing and reads
+    // as nothing. The span is not lost: `explanation` carries the finding's
+    // own message, and this turn's panel still renders `original` verbatim.
+    ...uniqueCorrections.map((c) => ({ pattern: c.pattern, type: c.kind, example: utterance, explanation: c.message })),
+    ...uniqueUpgrades.map((u) => ({ pattern: u.pattern, type: "vocab", example: utterance, explanation: u.why })),
   ]);
 
   const { hesitation, sessionFluency } = computeDelivery({ text: utterance, prosody, sessionPhonationMs, sessionSyllables });
