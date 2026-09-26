@@ -18,6 +18,11 @@ describe("VoiceStatus", () => {
     expect(container.querySelector('[aria-live="polite"]')).toBeTruthy();
   });
 
+  it("tells the learner the take sends itself once they go quiet", () => {
+    render(<VoiceStatus {...base} status="listening" liveTranscript="" />);
+    expect(screen.getByText(/when you go quiet/i)).toBeInTheDocument();
+  });
+
   it("shows the live transcript while listening", () => {
     render(<VoiceStatus {...base} status="listening" liveTranscript="hello wor" />);
     expect(screen.getByText(/hello wor/)).toBeInTheDocument();

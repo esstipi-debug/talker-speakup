@@ -26,6 +26,15 @@ function percentile(sorted, p) {
   return sorted[idx];
 }
 
+/** The adaptive silence floor, or null when the buffer has no speech/silence contrast. */
+function silenceFloor(framesDb, floorDropDb) {
+  const sorted = Array.from(framesDb).sort((a, b) => a - b);
+  const p95 = percentile(sorted, 0.95);
+  const p05 = percentile(sorted, 0.05);
+  if (p95 - p05 < MIN_DYNAMIC_RANGE_DB) return null;
+  return p95 - floorDropDb;
+}
+
 /**
  * @param {Float32Array|number[]} framesDb per-hop RMS in dB
  * @param {{hopMs: number, minPauseMs?: number, floorDropDb?: number}} opts
@@ -35,11 +44,8 @@ export function detectPauses(framesDb, { hopMs, minPauseMs = PAUSE_MIN_MS, floor
   const n = framesDb.length;
   if (!n || !hopMs) return [];
 
-  const sorted = Array.from(framesDb).sort((a, b) => a - b);
-  const p95 = percentile(sorted, 0.95);
-  const p05 = percentile(sorted, 0.05);
-  if (p95 - p05 < MIN_DYNAMIC_RANGE_DB) return []; // no speech/silence contrast
-  const floor = p95 - floorDropDb;
+  const floor = silenceFloor(framesDb, floorDropDb);
+  if (floor === null) return []; // no speech/silence contrast
 
   const pauses = [];
   let runStart = -1;
@@ -59,6 +65,33 @@ export function detectPauses(framesDb, { hopMs, minPauseMs = PAUSE_MIN_MS, floor
   }
   // A trailing silent run is the end of the turn, not a pause between speech.
   return pauses;
+}
+
+/**
+ * Milliseconds from the first voiced hop to the last — the stretch the learner
+ * actually spent talking, pauses inside it included. Leading silence (waiting
+ * to start) and trailing silence (waiting for the turn to end) fall outside
+ * it; counting them is what made "elapsed minus pauses" overstate phonation.
+ * Same floor as detectPauses, so the two always agree on what "silent" means.
+ *
+ * @param {Float32Array|number[]} framesDb per-hop RMS in dB
+ * @param {{hopMs: number, floorDropDb?: number}} opts
+ * @returns {number | null} null when there is no speech/silence contrast to measure
+ */
+export function voicedSpanMs(framesDb, { hopMs, floorDropDb = FLOOR_DROP_DB }) {
+  if (!framesDb.length || !hopMs) return null;
+  const floor = silenceFloor(framesDb, floorDropDb);
+  if (floor === null) return null;
+
+  let first = -1;
+  let last = -1;
+  for (let i = 0; i < framesDb.length; i += 1) {
+    if (framesDb[i] >= floor) {
+      if (first === -1) first = i;
+      last = i;
+    }
+  }
+  return (last - first + 1) * hopMs;
 }
 
 function pushIfLongEnough(pauses, startIdx, endIdx, hopMs, minPauseMs) {

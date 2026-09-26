@@ -1,6 +1,7 @@
 const LABELS = {
   idle: "Tap to speak",
-  listening: "Stop recording",
+  // Hands-free: going quiet sends the take by itself; the tap only skips the wait.
+  listening: "Send now",
   thinking: "Coach is thinking",
   speaking: "Interrupt coach and speak",
 };
@@ -34,7 +35,7 @@ export default function MicButton({ status = "idle", onClick, disabled, ref }) {
                 : "bg-coach text-white ring-coach/50 hover:scale-105 hover:shadow-[0_0_30px_-4px] hover:shadow-coach active:scale-95"
             }`}
         >
-          {blocked ? <ThinkingDots /> : isListening ? "■" : isSpeaking ? "✋" : "🎤"}
+          {blocked ? <ThinkingDots /> : isListening ? "➤" : isSpeaking ? "✋" : "🎤"}
         </button>
       </div>
       <span className="text-xs text-muted h-4">{LABELS[status]}</span>

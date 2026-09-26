@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "jest-axe";
 
 vi.mock("./hooks/useConversation.js", () => ({ useConversation: vi.fn() }));
 import { useConversation } from "./hooks/useConversation.js";
@@ -10,6 +11,7 @@ function hookState(over = {}) {
   return {
     messages: [{ role: "coach", text: "hi" }],
     status: "review",
+    live: false,
     draft: "x",
     interim: "",
     liveTranscript: "",
@@ -25,6 +27,7 @@ function hookState(over = {}) {
     send: vi.fn(),
     reRecord: vi.fn(),
     cancel: vi.fn(),
+    pause: vi.fn(),
     interrupt: vi.fn(),
     submitText: vi.fn(),
     replay: vi.fn(),
@@ -54,11 +57,11 @@ describe("App handleMicClick routing", () => {
     expect(state.interrupt).not.toHaveBeenCalled();
   });
 
-  it("calls stopListening when listening", async () => {
-    const state = hookState({ status: "listening" });
+  it("calls stopListening (send now) when listening", async () => {
+    const state = hookState({ status: "listening", live: true });
     useConversation.mockReturnValue(state);
     render(<App />);
-    await userEvent.click(screen.getByRole("button", { name: "Stop recording" }));
+    await userEvent.click(screen.getByRole("button", { name: "Send now" }));
     expect(state.stopListening).toHaveBeenCalledTimes(1);
     expect(state.startListening).not.toHaveBeenCalled();
   });
@@ -69,6 +72,46 @@ describe("App handleMicClick routing", () => {
     render(<App />);
     await userEvent.click(screen.getByRole("button", { name: "Interrupt coach and speak" }));
     expect(state.interrupt).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("App hands-free conversation", () => {
+  it("offers Pause while the conversation is live, and pauses it", async () => {
+    const state = hookState({ status: "listening", live: true });
+    useConversation.mockReturnValue(state);
+    render(<App />);
+    await userEvent.click(screen.getByRole("button", { name: "Pause conversation" }));
+    expect(state.pause).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns focus to the mic after pausing, since the Pause button itself goes away", async () => {
+    const state = hookState({ status: "listening", live: true });
+    useConversation.mockReturnValue(state);
+    render(<App />);
+    await userEvent.click(screen.getByRole("button", { name: "Pause conversation" }));
+    expect(screen.getByRole("button", { name: "Send now" })).toHaveFocus();
+  });
+
+  it("hides Pause once the conversation is not live", () => {
+    useConversation.mockReturnValue(hookState({ status: "idle", live: false }));
+    render(<App />);
+    expect(screen.queryByRole("button", { name: "Pause conversation" })).toBeNull();
+  });
+
+  // Typing is only accepted from idle; while the loop runs it is almost never
+  // idle, so an enabled box would swallow what the learner typed.
+  it("disables typing while the conversation is live, and says why", () => {
+    useConversation.mockReturnValue(hookState({ status: "speaking", live: true }));
+    render(<App />);
+    const textbox = screen.getByRole("textbox");
+    expect(textbox).toBeDisabled();
+    expect(textbox).toHaveAttribute("placeholder", expect.stringMatching(/pause the conversation to type/i));
+  });
+
+  it("has no axe violations while the conversation is live", async () => {
+    useConversation.mockReturnValue(hookState({ status: "listening", live: true, liveTranscript: "hello" }));
+    const { container } = render(<App />);
+    expect(await axe(container)).toHaveNoViolations();
   });
 });
 
