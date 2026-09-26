@@ -251,9 +251,10 @@ Once the loop is trustworthy, resume the Harper design: a substrate-agnostic gra
 
 ## Addendum A — hands-free conversation (2026-09-26)
 
-**Status:** implemented on `claude/hands-free-voice`; the real-mic checklist in
-`docs/superpowers/plans/voice-io-verification-checklist.md` is still to run. Reverses the §2 non-goal
-"VAD / silence-based auto-stop" and takes review off the main path.
+**Status:** implemented on `claude/hands-free-voice`. The learner ran it with a real microphone on
+2026-09-26 and reported that it works; the itemized real-mic checklist and the calibration counts in
+`docs/superpowers/plans/voice-io-verification-checklist.md` are not yet recorded. Reverses the §2
+non-goal "VAD / silence-based auto-stop" and takes review off the main path.
 
 **Trigger.** In real use the learner read three taps per turn (mic → stop → Send) as the system being
 broken — "it should be continuous". Nothing was broken: §2 chose that flow on purpose. The flow was

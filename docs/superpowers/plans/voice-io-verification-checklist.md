@@ -110,6 +110,9 @@ Browser-pane run drove it end to end with a simulated recognizer — but the Bro
 microphone, so these need a human, a real mic and real Chrome or Edge (`npm run dev`, then
 `http://localhost:5173`).
 
+**2026-09-26:** the learner ran the loop with a real microphone and reported that it works. The items
+below were not reported one by one, so they stay unticked until someone records them.
+
 - [ ] Tap the mic **once**, say a full sentence, then stay quiet → it sends by itself about 2 s later.
 - [ ] The coach answers out loud → the mic reopens by itself ("Listening…") with no tap. Repeat for
       three or four turns without touching anything.
