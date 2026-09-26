@@ -30,7 +30,7 @@ Make the **hybrid** voice loop trustworthy end-to-end so we can build grammar fe
 - Server-side STT / Whisper (kept dormant on disk, gated by `STT_PROVIDER`; the **client** Ruta B orchestration is removed this milestone and re-added in M7 for pronunciation feedback).
 - M2 structured feedback (fluency/confidence/corrections), ErrorLedger writes, scenarios, spaced repetition.
 - Streaming TTS.
-- **VAD / silence-based auto-stop.** The utterance ends when the *user* taps stop, not when the recognizer detects silence. Note: setting `continuous=true` (§5.3) is *not* VAD — it is the opposite, keeping the session open across pauses so silence does not end the turn.
+- **VAD / silence-based auto-stop.** The utterance ends when the *user* taps stop, not when the recognizer detects silence. Note: setting `continuous=true` (§5.3) is *not* VAD — it is the opposite, keeping the session open across pauses so silence does not end the turn. **Reversed 2026-09-26 — see [Addendum A](#addendum-a--hands-free-conversation-2026-09-26).**
 - Making Web Speech private/offline (it routes audio through Google — accepted trade-off, see §9).
 
 ## 3. Stack Decision & Rationale
@@ -246,3 +246,77 @@ Once the loop is trustworthy, resume the Harper design: a substrate-agnostic gra
 
 ---
 *Notes: (1) `C:\talker` is not a git repository, so this spec is not committed. If you want version history for the design docs, we can `git init` before implementation. (2) This spec was hardened against a multi-agent adversarial review (24 confirmed findings applied) on 2026-07-24.*
+
+---
+
+## Addendum A — hands-free conversation (2026-09-26)
+
+**Status:** implemented on `claude/hands-free-voice`; the real-mic checklist in
+`docs/superpowers/plans/voice-io-verification-checklist.md` is still to run. Reverses the §2 non-goal
+"VAD / silence-based auto-stop" and takes review off the main path.
+
+**Trigger.** In real use the learner read three taps per turn (mic → stop → Send) as the system being
+broken — "it should be continuous". Nothing was broken: §2 chose that flow on purpose. The flow was
+wrong for the product: speaking practice that felt like texting.
+
+### A.1 Decisions (the learner's)
+
+- **No review step on the main path.** A take is sent exactly as heard; the editable draft of §5.1
+  survives only when a send fails. Recorded cost, chosen knowing it: recognizer errors now reach the
+  coach, the corrections and the ErrorLedger unconfirmed. §3's "the review step compensates for
+  mis-recognition" no longer holds on the main path. §12's `source` hint (typed vs speech) is the
+  natural mitigation if the ledger starts filling with ASR noise.
+- **End of take: 2 s of silence, or 4 s when the words so far dangle** — ending on an article,
+  possessive, conjunction, common preposition, filler, or a trailing comma
+  (`client/src/lib/turnEnd.js`). Both values are UNCALIBRATED.
+
+### A.2 Mechanism
+
+- The silence clock runs from the last recognizer event that carried words (`onResult` /
+  `onInterim`), not from audio energy; every such event restarts it. Chrome's own silence
+  self-termination still restarts the recognizer (§5.1 continuity) and does not reset the clock.
+- One tap starts the conversation (`live`). The mic reopens by itself once the coach has finished —
+  and only then, never while coach audio plays: our capture runs with echo cancellation off
+  (`micStream.js`). If an audio end is never reported, the playback timeout stops the audio before
+  listening. Barge-in stays a tap.
+- While listening, the mic button is **Send now** (skips the wait). A **Pause** control shows while
+  live: listening → the unfinished take is discarded, not sent and not measured; speaking → the coach
+  is silenced; thinking → the reply plays, then the mic stays closed.
+- 30 s of listening without a word pauses the conversation (UNCALIBRATED): Web Speech streams audio to
+  Google (Microsoft on Edge) for as long as the mic is open.
+- A typed turn never reopens the mic, and the text box is disabled while live — typing is only
+  accepted from idle, so an enabled box would swallow input.
+- Every status transition writes `statusRef` synchronously (`setStatusNow`). The loop chains
+  thinking → speaking → idle inside one batch, and an effect-synced ref misses a batch that ends on the
+  status already rendered — it stayed stuck on `speaking` and blocked the next typed turn.
+
+### A.3 Measurement change this forced
+
+Phonation used to be elapsed capture minus pauses. Hands-free adds seconds of silence to both ends of
+every take: waiting to start after the coach, and the silence that ends the take. Worked example:
+60 syllables over 10 s of speech is 6.0 syll/s — score 50, the fast-speaker error `delivery.js` exists
+to catch; book ~4 s of edge silence as speech and it reads 4.3 syll/s, score 96. Phonation is now the
+voiced span (first to last voiced hop, same adaptive floor as `detectPauses`) minus the pauses inside
+it, falling back to elapsed time when there is no speech/silence contrast. This also removes the
+smaller bias the manual flow already had.
+
+Also: the pause note is no longer cleared when listening starts (it would vanish seconds after it
+appeared, as the mic reopens); a typed turn clears it, since the note belongs to the last spoken take.
+
+### A.4 Rejected
+
+| Alternative | Why not |
+|---|---|
+| Chrome's own endpointing (`continuous=false`) | The pre-July behavior: cuts at the first pause (§1). |
+| Energy VAD on our own capture | The silence floor is a whole-utterance statistic (`pauses.js`); streaming it is a new calibration problem. |
+| Neural VAD (Silero via `@ricky0123/vad-web`) | ~2 MB of model and runtime, a new dependency — and it still measures silence, not a finished idea. |
+| Continuous by default + a switch back to review | Offered as the recommendation; declined by the learner. |
+| An undo window before each send | Adds its own length to every turn. |
+
+### A.5 Open
+
+- Calibrate the three constants on real sessions. Prepositions end English questions ("where are you
+  from?"), so those turns wait 4 s.
+- Confirm in real Chrome/Edge that `start()` and coach audio work for the whole session without a
+  fresh gesture — expected from the first tap's sticky activation, unverifiable in jsdom or the
+  Browser pane (no microphone there).

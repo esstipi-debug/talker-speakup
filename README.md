@@ -40,29 +40,40 @@ exists for that.
 ```mermaid
 flowchart LR
   U(["you speak"]) --> S["STT<br/>browser Web Speech"]
-  S --> R["review + edit<br/>the transcript"]
-  R --> B["brain<br/>mock · Mistral"]
+  S --> Q["you go quiet<br/>the take sends itself"]
+  Q --> B["brain<br/>mock · Mistral"]
   B --> T["TTS<br/>Kokoro · Voicebox · browser"]
   T --> C(["coach replies out loud"])
   C --> U
 ```
 
-That "review + edit" box is not decoration — it's the reason the whole project is built in this order.
-See [Grammar](#grammar-the-part-that-actually-matters).
+It's a conversation, not a walkie-talkie: one tap opens it, a silence of two seconds ends each take
+(four when the phrase is left hanging on *and*, *the*, *because*…), and the mic reopens by itself once
+the coach has finished — never while it is still talking.
+
+Until 2026-09-26 a "review + edit" box sat where "you go quiet" is now, and it was the reason the whole
+project is built in this order. It left the main path by the learner's choice: a continuous
+conversation over confirming every transcript. The cost is recorded rather than hidden — see
+[Grammar](#grammar-the-part-that-actually-matters) and the voice spec's
+[Addendum A](docs/superpowers/specs/2026-07-24-voice-io-hardening-design.md#addendum-a--hands-free-conversation-2026-09-26).
 
 The client is an explicit state machine, not a pile of booleans:
 
 ```mermaid
 stateDiagram-v2
   [*] --> idle
-  idle --> listening: tap mic
-  listening --> review: tap stop
-  review --> thinking: send
+  idle --> listening: tap mic — the conversation starts
+  listening --> thinking: you go quiet, or tap send-now
+  thinking --> speaking: coach reply + audio
+  speaking --> listening: coach done — the mic reopens by itself
+  speaking --> listening: barge-in — tap to cut it off
+  speaking --> idle: finished, after a typed turn
+  thinking --> review: send failed
+  review --> thinking: send again
   review --> listening: re-record
   review --> idle: cancel
-  thinking --> speaking: coach reply + audio
-  speaking --> idle: finished
-  speaking --> listening: barge-in — tap to cut it off
+  listening --> idle: pause, or 30 s without a word
+  speaking --> idle: pause
 ```
 
 ---
@@ -88,6 +99,11 @@ So the order is deliberate:
 1. **Harden the voice loop first** ← *shipped* — including a **review-and-edit step**, so a human
    confirms the transcript before it becomes the thing being corrected.
 2. **Then** put a grammar engine on top of text you can actually trust.
+
+**Since 2026-09-26 step 1's guarantee no longer holds on the main path.** The loop went hands-free and
+the review step went with it — the learner's call, made knowing the trade. What gets corrected, and
+what lands in the error ledger, is now the recognizer's transcript, unconfirmed: an error the ASR
+invented can be booked as the learner's. Review still appears when a send fails.
 
 ### The engine: two passes, not one
 
@@ -336,11 +352,11 @@ the text input is still a first-class path there, but that is not speaking pract
 
 ## Tests
 
-**461 tests** — 223 on the client (Vitest + Testing Library + jsdom) and 238 on the server (Vitest, node
+**502 tests** — 264 on the client (Vitest + Testing Library + jsdom) and 238 on the server (Vitest, node
 environment, binding port 0 so they never collide with a running dev server). Coverage is gated at 80%
 on four metrics for the files where the bodies are buried: `useConversation.js`, `speech.js`,
-`micStream.js`, `lib/prosody/**` on the client, and `server/src/feedback/**` + `server/src/metrics/**`
-on the server. Plus `jest-axe` assertions on the components.
+`turnEnd.js`, `micStream.js`, `lib/prosody/**` on the client, and `server/src/feedback/**` +
+`server/src/metrics/**` on the server. Plus `jest-axe` assertions on the components.
 
 ```bash
 npm test                              # both suites

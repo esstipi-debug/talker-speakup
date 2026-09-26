@@ -8,8 +8,9 @@ describe("MicButton aria-label", () => {
     const { rerender } = render(<MicButton status="idle" onClick={() => {}} />);
     expect(screen.getByRole("button")).toHaveAccessibleName("Tap to speak");
 
+    // Hands-free: a silence sends the take by itself; the tap just skips the wait.
     rerender(<MicButton status="listening" onClick={() => {}} />);
-    expect(screen.getByRole("button")).toHaveAccessibleName("Stop recording");
+    expect(screen.getByRole("button")).toHaveAccessibleName("Send now");
 
     rerender(<MicButton status="speaking" onClick={() => {}} />);
     expect(screen.getByRole("button")).toHaveAccessibleName("Interrupt coach and speak");

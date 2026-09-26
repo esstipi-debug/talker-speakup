@@ -14,6 +14,7 @@ export default defineConfig({
       include: [
         "src/hooks/useConversation.js",
         "src/lib/speech.js",
+        "src/lib/turnEnd.js",
         "src/lib/micStream.js",
         "src/lib/prosody/**/*.js",
       ],

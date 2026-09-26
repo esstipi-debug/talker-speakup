@@ -100,3 +100,29 @@ because the execution scratch directory is git-ignored and dies with the branch.
 - **Weak spot in the current tests:** the two "leaves fluency null" cases cannot distinguish "left
   untouched" from "wrote null", since the column defaults to null. If M4 ever updates a turn row more
   than once, pre-set the column and re-assert.
+
+---
+
+## Hands-free conversation — real-mic checklist (2026-09-26)
+
+Design: the voice spec's Addendum A. The loop is pinned by unit tests with fake timers, and a
+Browser-pane run drove it end to end with a simulated recognizer — but the Browser pane has no
+microphone, so these need a human, a real mic and real Chrome or Edge (`npm run dev`, then
+`http://localhost:5173`).
+
+- [ ] Tap the mic **once**, say a full sentence, then stay quiet → it sends by itself about 2 s later.
+- [ ] The coach answers out loud → the mic reopens by itself ("Listening…") with no tap. Repeat for
+      three or four turns without touching anything.
+- [ ] **Echo:** none of the coach's words ever show up as your transcript.
+- [ ] Say "I stayed home because…", stop for ~3 s, then finish the sentence → it waits for you (the
+      4 s window) instead of sending half the idea.
+- [ ] While you talk, tap **Send now** (➤) → it sends immediately.
+- [ ] While the coach talks, tap ✋ → the coach stops and it starts listening (barge-in).
+- [ ] Tap **Pause** mid-sentence → nothing is sent, the mic closes, and the text box becomes usable.
+- [ ] Tap the mic and say nothing for 30 s → it pauses by itself with a message.
+- [ ] Browser-policy check (unverifiable in jsdom): across the whole session the coach's voice plays
+      and the mic reopens without a fresh tap. If either stalls after the first turn, Chrome is
+      demanding a new gesture — record it here.
+- [ ] Calibration note: count the turns that cut you off mid-thought, and the ones where the wait felt
+      too long. Those two numbers decide whether the 2 s / 4 s constants in `client/src/lib/turnEnd.js`
+      move.

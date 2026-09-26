@@ -5,6 +5,8 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 let recHandlers = null;
 let nextRecognizerNull = false; // flip true to force createRecognizer -> null once
 let nextStartThrows = false; // flip true to force the next recognizer.start() -> throw once
+let abortCalls = 0; // recognizer.abort() calls, across every recognizer the hook creates
+let deferNextOnStart = false; // flip true to make the next start() report onstart later, like Chrome can
 
 vi.mock("../lib/api.js", () => ({
   postTurn: vi.fn(),
@@ -33,10 +35,16 @@ vi.mock("../lib/speech.js", async () => {
             nextStartThrows = false;
             throw new Error("InvalidStateError");
           }
+          if (deferNextOnStart) {
+            deferNextOnStart = false; // the test fires handlers.onStart itself
+            return;
+          }
           handlers.onStart?.();
         },
         stop: () => handlers.onEnd?.(),
-        abort: () => {},
+        abort: () => {
+          abortCalls += 1;
+        },
       };
     },
   };
@@ -70,6 +78,8 @@ beforeEach(() => {
   stopSpeaking.mockClear();
   nextRecognizerNull = false;
   nextStartThrows = false;
+  abortCalls = 0;
+  deferNextOnStart = false;
 });
 
 describe("useConversation — text path", () => {
@@ -305,20 +315,25 @@ describe("useConversation — speech machine", () => {
     expect(result.current.draft).toBe("Yesterday I went to the park");
   });
 
-  it("user stop with a non-empty draft goes to review", async () => {
+  it("send-now with a non-empty draft sends it straight away — there is no review step", async () => {
+    postTurn.mockResolvedValue({ coach_reply: "Nice", xp: 1, audio: "AAAA", audioFormat: "mp3" });
     const { result } = await mounted();
     act(() => result.current.startListening());
     act(() => recHandlers.onResult("Hello there"));
     act(() => result.current.stopListening()); // fake stop() -> onEnd
-    expect(result.current.status).toBe("review");
-    expect(result.current.draft).toBe("Hello there");
+    expect(result.current.status).toBe("thinking");
+    expect(result.current.messages.at(-1)).toMatchObject({ role: "user", text: "Hello there" });
+    expect(postTurn).toHaveBeenCalledWith(expect.objectContaining({ utterance: "Hello there" }));
+    await waitFor(() => expect(result.current.status).toBe("speaking"));
   });
 
-  it("user stop with an empty draft returns to idle with a message", async () => {
+  it("send-now with an empty draft ends the conversation with a message", async () => {
     const { result } = await mounted();
     act(() => result.current.startListening());
     act(() => result.current.stopListening());
     expect(result.current.status).toBe("idle");
+    expect(result.current.live).toBe(false);
+    expect(postTurn).not.toHaveBeenCalled();
     expect(result.current.error).toMatch(/didn't catch that/i);
   });
 
@@ -367,18 +382,21 @@ describe("useConversation — speech machine", () => {
     }
   });
 
-  it("send posts the edited draft and clears it", async () => {
-    postTurn.mockResolvedValue({ coach_reply: "Great", xp: 8, audio: "AAAA", audioFormat: "mp3" });
+  it("a failed send brings the take back for review, and the edited resend posts the edit", async () => {
+    postTurn.mockRejectedValueOnce(new Error("boom"));
+    postTurn.mockResolvedValueOnce({ coach_reply: "Great", xp: 8, audio: "AAAA", audioFormat: "mp3" });
     const { result } = await mounted();
     act(() => result.current.startListening());
     act(() => recHandlers.onResult("i like it"));
-    act(() => result.current.stopListening());
+    act(() => result.current.stopListening()); // sends -> fails
+    await waitFor(() => expect(result.current.status).toBe("review"));
+    expect(result.current.draft).toBe("i like it");
     act(() => result.current.editDraft("I like it a lot"));
     act(() => result.current.send());
     expect(result.current.messages.at(-1)).toMatchObject({ role: "user", text: "I like it a lot" });
     await waitFor(() => expect(result.current.status).toBe("speaking"));
     expect(result.current.draft).toBe("");
-    expect(postTurn).toHaveBeenCalledWith(
+    expect(postTurn).toHaveBeenLastCalledWith(
       expect.objectContaining({
         utterance: "I like it a lot",
         history: expect.arrayContaining([{ role: "user", text: "I like it a lot" }]),
@@ -448,28 +466,33 @@ describe("useConversation — speech machine", () => {
     expect(playAudio).not.toHaveBeenCalled();
   });
 
-  it("fatal mic error surfaces the permission message and stops listening", async () => {
+  it("fatal mic error surfaces the permission message and ends the conversation", async () => {
     const { result } = await mounted();
     act(() => result.current.startListening());
     act(() => recHandlers.onError("not-allowed"));
     act(() => recHandlers.onEnd());
     expect(result.current.error).toMatch(/permission/i);
     expect(result.current.status).toBe("idle");
+    expect(result.current.live).toBe(false);
   });
 
-  it("reRecord clears the draft and restarts listening; cancel returns to idle", async () => {
+  it("from the failure review, reRecord restarts listening and cancel ends the conversation", async () => {
+    postTurn.mockRejectedValue(new Error("boom"));
     const { result } = await mounted();
     act(() => result.current.startListening());
     act(() => recHandlers.onResult("hello"));
-    act(() => result.current.stopListening()); // -> review
+    act(() => result.current.stopListening()); // sends -> fails -> review
+    await waitFor(() => expect(result.current.status).toBe("review"));
     act(() => result.current.reRecord());
     expect(result.current.status).toBe("listening");
     expect(result.current.draft).toBe("");
     act(() => recHandlers.onResult("again"));
-    act(() => result.current.stopListening()); // -> review
+    act(() => result.current.stopListening()); // fails again -> review
+    await waitFor(() => expect(result.current.status).toBe("review"));
     act(() => result.current.cancel());
     expect(result.current.status).toBe("idle");
     expect(result.current.draft).toBe("");
+    expect(result.current.live).toBe(false);
   });
 
   it("network and no-speech errors set the right messages", async () => {
@@ -490,15 +513,24 @@ describe("useConversation — speech machine", () => {
     expect(playAudio).toHaveBeenCalled();
   });
 
-  it("finalizes to review once past the max session cap", async () => {
+  it("sends what it has once past the max session cap", async () => {
+    postTurn.mockResolvedValue({ coach_reply: "ok", xp: 1, audio: "AAAA", audioFormat: "mp3" });
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(0);
     const { result } = await mounted();
     act(() => result.current.startListening());
     act(() => recHandlers.onResult("something"));
     nowSpy.mockReturnValue(200000); // past MAX_LISTEN_MS
     act(() => recHandlers.onEnd());  // auto onend past the cap -> finalize
-    expect(result.current.status).toBe("review");
+    expect(postTurn).toHaveBeenCalledWith(expect.objectContaining({ utterance: "something" }));
     nowSpy.mockRestore();
+  });
+
+  it("leaves the conversation closed when the recognizer refuses to start", async () => {
+    const { result } = await mounted();
+    nextStartThrows = true;
+    act(() => result.current.startListening());
+    expect(result.current.status).toBe("idle");
+    expect(result.current.live).toBe(false);
   });
 
   it("returns to idle with a message when the recognizer is unsupported", async () => {
@@ -506,6 +538,7 @@ describe("useConversation — speech machine", () => {
     nextRecognizerNull = true;
     act(() => result.current.startListening());
     expect(result.current.status).toBe("idle");
+    expect(result.current.live).toBe(false);
     expect(result.current.error).toMatch(/isn't supported/i);
   });
 
@@ -634,15 +667,18 @@ describe("useConversation — speech machine", () => {
     expect(postTurn).not.toHaveBeenCalled();
   });
 
-  it("send with a whitespace-only draft returns to idle without posting", async () => {
+  it("send with a whitespace-only draft ends the conversation without posting again", async () => {
+    postTurn.mockRejectedValueOnce(new Error("boom"));
     const { result } = await mounted();
     act(() => result.current.startListening());
     act(() => recHandlers.onResult("x"));
-    act(() => result.current.stopListening()); // -> review
+    act(() => result.current.stopListening()); // sends -> fails -> review
+    await waitFor(() => expect(result.current.status).toBe("review"));
     act(() => result.current.editDraft("   "));
     act(() => result.current.send());
     expect(result.current.status).toBe("idle");
-    expect(postTurn).not.toHaveBeenCalled();
+    expect(result.current.live).toBe(false);
+    expect(postTurn).toHaveBeenCalledTimes(1); // only the failed original
   });
 
   it("reRecord is a no-op outside review", async () => {
@@ -809,29 +845,30 @@ describe("useConversation — pause profile", () => {
 
     const { result } = await mountedProsody();
 
-    // First take: 3 internal breaks. Never sent — the learner re-records instead.
+    // First take: 3 internal breaks. Its send fails and the learner re-records
+    // instead of resending, so it never lands.
+    postTurn.mockRejectedValueOnce(new Error("boom"));
     mic.getFrames.mockReturnValue(
       buildFrames([[500, -20], [300, -70], [500, -20], [300, -70], [500, -20], [300, -70], [500, -20]]),
     );
     await act(async () => { result.current.startListening(); });
     act(() => recHandlers.onResult("I think"));
     act(() => recHandlers.onResult("that we should go"));
-    await act(async () => { result.current.stopListening(); }); // -> review
+    await act(async () => { result.current.stopListening(); }); // sends -> fails -> review
     act(() => result.current.reRecord()); // discard take 1, back to listening
 
     // Second take: 1 internal break. This is the one actually sent.
+    postTurn.mockResolvedValueOnce({ coach_reply: "ok", xp: 1, sessionId: "s1" });
     mic.getFrames.mockReturnValue(buildFrames([[500, -20], [300, -70], [500, -20]]));
     act(() => recHandlers.onResult("hello"));
-    await act(async () => { result.current.stopListening(); }); // -> review
+    await act(async () => { result.current.stopListening(); }); // sends
 
-    postTurn.mockResolvedValue({ coach_reply: "ok", xp: 1, sessionId: "s1" });
-    act(() => result.current.send());
-    await waitFor(() => expect(postTurn).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(postTurn).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(result.current.sessionPauseCounts.internal).toBe(1));
     expect(result.current.sessionPauseCounts.total).toBe(1);
   });
 
-  it("never counts a cancelled take, even against a later turn that was only typed", async () => {
+  it("never counts a take the learner paused away mid-sentence", async () => {
     mic.getFrames.mockReturnValue(
       buildFrames([[500, -20], [300, -70], [500, -20], [300, -70], [500, -20], [300, -70], [500, -20]]),
     );
@@ -841,14 +878,35 @@ describe("useConversation — pause profile", () => {
     const { result } = await mountedProsody();
     await act(async () => { result.current.startListening(); });
     act(() => recHandlers.onResult("I think"));
-    act(() => recHandlers.onResult("that we should go"));
-    await act(async () => { result.current.stopListening(); }); // -> review, 3 internal breaks pending
-    act(() => result.current.cancel()); // discarded forever, never sent
+    act(() => result.current.pause()); // discarded: not sent, not measured
+    expect(mic.stopFrames).toHaveBeenCalled();
 
     postTurn.mockResolvedValue({ coach_reply: "ok", xp: 1, sessionId: "s1" });
     act(() => result.current.submitText("typed instead"));
     await waitFor(() => expect(postTurn).toHaveBeenCalledTimes(1));
     expect(postTurn.mock.calls[0][0].prosody).toBeNull();
+    expect(result.current.sessionPauseCounts.total).toBe(0);
+  });
+
+  it("never counts a cancelled take, even against a later turn that was only typed", async () => {
+    mic.getFrames.mockReturnValue(
+      buildFrames([[500, -20], [300, -70], [500, -20], [300, -70], [500, -20], [300, -70], [500, -20]]),
+    );
+    let t = 0;
+    mic.micNowMs.mockImplementation(() => (t += 5000));
+
+    postTurn.mockRejectedValueOnce(new Error("boom"));
+    const { result } = await mountedProsody();
+    await act(async () => { result.current.startListening(); });
+    act(() => recHandlers.onResult("I think"));
+    act(() => recHandlers.onResult("that we should go"));
+    await act(async () => { result.current.stopListening(); }); // send fails -> review, 3 internal breaks pending
+    act(() => result.current.cancel()); // discarded forever, never resent
+
+    postTurn.mockResolvedValue({ coach_reply: "ok", xp: 1, sessionId: "s1" });
+    act(() => result.current.submitText("typed instead"));
+    await waitFor(() => expect(postTurn).toHaveBeenCalledTimes(2));
+    expect(postTurn.mock.calls[1][0].prosody).toBeNull();
     await waitFor(() => expect(result.current.status).toBe("idle"));
     expect(result.current.sessionPauseCounts).toEqual({ total: 0, internal: 0, boundary: 0, unknown: 0 });
   });
@@ -861,13 +919,14 @@ describe("useConversation — pause profile", () => {
     let t = 0;
     mic.micNowMs.mockImplementation(() => (t += 5000));
 
+    postTurn.mockRejectedValueOnce(new Error("boom"));
     postTurn.mockResolvedValue({ coach_reply: "ok", xp: 1, sessionId: "s1", turnId: "t1" });
     postFeedback.mockResolvedValue(null);
 
     const { result } = await mountedProsody();
     await act(async () => { result.current.startListening(); });
     act(() => recHandlers.onResult("long take"));
-    await act(async () => { result.current.stopListening(); }); // -> review
+    await act(async () => { result.current.stopListening(); }); // send fails -> review
     act(() => result.current.cancel()); // discarded forever — must not contribute phonation
 
     await act(async () => { await result.current.submitText("typed instead"); });
@@ -895,18 +954,359 @@ describe("useConversation — pause profile", () => {
     // Turn 1: spoken.
     await act(async () => { result.current.startListening(); });
     act(() => recHandlers.onResult("banana")); // 3 vowel groups: a-a-a
-    await act(async () => { result.current.stopListening(); }); // -> review
-    await act(async () => { result.current.send(); });
+    await act(async () => { result.current.stopListening(); }); // sends
     await waitFor(() => expect(postFeedback).toHaveBeenCalledTimes(1));
     const spokenSyllables = postFeedback.mock.calls[0][0].sessionSyllables;
     expect(spokenSyllables).toBe(3);
 
     // Turn 2: typed. It carries no phonation, so it must contribute no
-    // syllables either — the count sent is unchanged from turn 1.
-    await waitFor(() => expect(result.current.status).toBe("idle"));
+    // syllables either — the count sent is unchanged from turn 1. The mic
+    // reopened by itself after the coach, so pause the conversation to type.
+    await waitFor(() => expect(result.current.status).toBe("listening"));
+    act(() => result.current.pause());
     await act(async () => { await result.current.submitText("elephantine oratorio umbrella academia"); });
     await waitFor(() => expect(postFeedback).toHaveBeenCalledTimes(2));
     expect(postFeedback.mock.calls[1][0].sessionSyllables).toBe(spokenSyllables);
+  });
+
+  // Hands-free adds seconds of silence to both ends of every take — waiting to
+  // start after the coach, and the wait that ends the turn. Booked as speech,
+  // they drag the articulation rate toward the target and hide a fast speaker.
+  it("measures phonation over the voiced span, not the whole capture window", async () => {
+    // 1s before speaking, 3s of speech, 2s of waiting for the turn to end.
+    mic.getFrames.mockReturnValue(buildFrames([[1000, -70], [3000, -20], [2000, -70]]));
+    mic.micNowMs.mockReturnValue(6000);
+    postTurn.mockResolvedValue({ coach_reply: "ok", xp: 1, sessionId: "s1" });
+
+    const { result } = await mountedProsody();
+    await act(async () => { result.current.startListening(); });
+    act(() => recHandlers.onResult("hello there"));
+    await act(async () => { result.current.stopListening(); });
+
+    await waitFor(() => expect(postTurn).toHaveBeenCalledTimes(1));
+    expect(postTurn.mock.calls[0][0].prosody.phonationMs).toBe(3000);
+  });
+
+  it("keeps the pause note up after the mic reopens, until the next take replaces it", async () => {
+    mic.getFrames.mockReturnValue(
+      buildFrames([[500, -20], [300, -70], [500, -20], [300, -70], [500, -20], [300, -70], [500, -20]]),
+    );
+    let t = 0;
+    mic.micNowMs.mockImplementation(() => (t += 5000));
+    postTurn.mockResolvedValue({ coach_reply: "ok", xp: 1, sessionId: "s1" });
+
+    const { result } = await mountedProsody();
+    await act(async () => { result.current.startListening(); });
+    act(() => recHandlers.onResult("I think"));
+    act(() => recHandlers.onResult("that we should go"));
+    await act(async () => { result.current.stopListening(); });
+
+    await waitFor(() => expect(result.current.status).toBe("listening")); // reopened by itself
+    expect(result.current.pauseNote).toMatch(/broke mid-phrase 3/);
+  });
+
+  it("does not leave the last spoken take's pause note hanging under a typed turn", async () => {
+    mic.getFrames.mockReturnValue(
+      buildFrames([[500, -20], [300, -70], [500, -20], [300, -70], [500, -20], [300, -70], [500, -20]]),
+    );
+    let t = 0;
+    mic.micNowMs.mockImplementation(() => (t += 5000));
+    postTurn.mockResolvedValue({ coach_reply: "ok", xp: 1, sessionId: "s1" });
+
+    const { result } = await mountedProsody();
+    await act(async () => { result.current.startListening(); });
+    act(() => recHandlers.onResult("I think"));
+    act(() => recHandlers.onResult("that we should go"));
+    await act(async () => { result.current.stopListening(); });
+    await waitFor(() => expect(result.current.status).toBe("listening"));
+    expect(result.current.pauseNote).toMatch(/broke mid-phrase 3/);
+
+    act(() => result.current.pause());
+    act(() => result.current.submitText("typed"));
+    expect(result.current.pauseNote).toBeNull();
+  });
+});
+
+describe("useConversation — hands-free loop", () => {
+  async function mounted() {
+    const utils = renderHook(() => useConversation());
+    await waitFor(() => expect(utils.result.current.providers.tts).toBe("kokoro"));
+    // Fake timers only after mount: the waitFor above polls on real timers.
+    vi.useFakeTimers();
+    return utils;
+  }
+
+  /** Advance fake time and let the promise work it unblocks (postTurn) settle. */
+  async function advance(ms) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
+  /** A playAudio stand-in that never ends on its own; hands back its end callback. */
+  function holdCoachAudio() {
+    const held = { handle: { pause: vi.fn() }, end: null };
+    playAudio.mockImplementationOnce((_audio, opts) => {
+      held.end = opts.onEnd;
+      return held.handle;
+    });
+    return held;
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+    playAudio.mockImplementation(() => ({ pause: vi.fn() }));
+  });
+
+  it("goes live on the first tap", async () => {
+    const { result } = await mounted();
+    expect(result.current.live).toBe(false);
+    act(() => result.current.startListening());
+    expect(result.current.live).toBe(true);
+  });
+
+  it("sends the turn by itself after two seconds of silence", async () => {
+    postTurn.mockResolvedValue({ coach_reply: "Nice", xp: 1, audio: "AAAA", audioFormat: "mp3" });
+    const { result } = await mounted();
+    act(() => result.current.startListening());
+    act(() => recHandlers.onResult("I went to the park yesterday"));
+    await advance(1999);
+    expect(postTurn).not.toHaveBeenCalled();
+    expect(result.current.status).toBe("listening");
+    await advance(1);
+    expect(postTurn).toHaveBeenCalledWith(expect.objectContaining({ utterance: "I went to the park yesterday" }));
+  });
+
+  it("restarts the silence clock whenever new words arrive", async () => {
+    postTurn.mockResolvedValue({ coach_reply: "Nice", xp: 1, audio: "AAAA", audioFormat: "mp3" });
+    const { result } = await mounted();
+    act(() => result.current.startListening());
+    act(() => recHandlers.onResult("Yesterday I went hiking"));
+    await advance(1500);
+    act(() => recHandlers.onInterim("with friends"));
+    await advance(1999);
+    expect(postTurn).not.toHaveBeenCalled();
+    await advance(1);
+    expect(postTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ utterance: "Yesterday I went hiking with friends" }),
+    );
+  });
+
+  it("waits four seconds when the phrase is left hanging", async () => {
+    postTurn.mockResolvedValue({ coach_reply: "Nice", xp: 1, audio: "AAAA", audioFormat: "mp3" });
+    const { result } = await mounted();
+    act(() => result.current.startListening());
+    act(() => recHandlers.onResult("I stayed home because"));
+    await advance(3999);
+    expect(postTurn).not.toHaveBeenCalled();
+    await advance(1);
+    expect(postTurn).toHaveBeenCalledWith(expect.objectContaining({ utterance: "I stayed home because" }));
+  });
+
+  it("never listens over the coach, and reopens the mic once the coach has finished", async () => {
+    const coach = holdCoachAudio();
+    postTurn.mockResolvedValue({ coach_reply: "Nice", xp: 1, audio: "AAAA", audioFormat: "mp3" });
+    const { result } = await mounted();
+    act(() => result.current.startListening());
+    const firstRecognizer = recHandlers;
+    act(() => recHandlers.onResult("I went to the park yesterday"));
+    await advance(2000);
+    expect(result.current.status).toBe("speaking");
+    expect(recHandlers).toBe(firstRecognizer); // no new recognizer while the coach's audio plays
+
+    act(() => coach.end());
+    expect(result.current.status).toBe("listening");
+    expect(recHandlers).not.toBe(firstRecognizer);
+    expect(result.current.live).toBe(true);
+  });
+
+  it("stops the coach's audio before listening when its end is never reported", async () => {
+    const coach = holdCoachAudio();
+    postTurn.mockResolvedValue({ coach_reply: "Nice", xp: 1, audio: "AAAA", audioFormat: "mp3" });
+    const { result } = await mounted();
+    act(() => result.current.startListening());
+    act(() => recHandlers.onResult("I went to the park yesterday"));
+    await advance(2000);
+    expect(result.current.status).toBe("speaking");
+    await advance(4000); // playCoach's fallback for a one-word reply
+    expect(coach.handle.pause).toHaveBeenCalled();
+    expect(result.current.status).toBe("listening");
+  });
+
+  it("leaves the mic closed after a typed turn", async () => {
+    postTurn.mockResolvedValue({ coach_reply: "Ok", xp: 1, audio: null });
+    const { result } = await mounted();
+    act(() => result.current.submitText("typed"));
+    await advance(0);
+    expect(speak).toHaveBeenCalled();
+    expect(result.current.status).toBe("idle");
+    expect(result.current.live).toBe(false);
+  });
+
+  it("pausing mid-sentence discards the take and closes the mic", async () => {
+    const { result } = await mounted();
+    act(() => result.current.startListening());
+    act(() => recHandlers.onResult("half a"));
+    act(() => result.current.pause());
+    expect(result.current.status).toBe("idle");
+    expect(result.current.live).toBe(false);
+    expect(result.current.draft).toBe("");
+    expect(abortCalls).toBe(1);
+    await advance(10000); // the silence timer must be gone with it
+    expect(postTurn).not.toHaveBeenCalled();
+  });
+
+  // The mic reopens ~100ms after the coach's voice ends, while status still
+  // reads "speaking" — a tap in that gap starts a second recognizer. The first
+  // one's late events must not write into the new take or end it.
+  it("ignores events from a recognizer that has been replaced", async () => {
+    const { result } = await mounted();
+    act(() => result.current.startListening());
+    const stale = recHandlers;
+    act(() => result.current.pause());
+    act(() => result.current.startListening());
+    act(() => stale.onResult("ghost words"));
+    act(() => stale.onInterim("more ghost"));
+    act(() => stale.onEnd());
+    await advance(5000);
+    expect(result.current.liveTranscript).toBe("");
+    expect(result.current.status).toBe("listening");
+    expect(postTurn).not.toHaveBeenCalled();
+  });
+
+  it("a tap in the gap before the reopened mic starts aborts the half-started recognizer", async () => {
+    const coach = holdCoachAudio();
+    postTurn.mockResolvedValue({ coach_reply: "Nice", xp: 1, audio: "AAAA", audioFormat: "mp3" });
+    const { result } = await mounted();
+    act(() => result.current.startListening());
+    act(() => recHandlers.onResult("I went to the park yesterday"));
+    await advance(2000); // sent; the coach is speaking
+
+    deferNextOnStart = true; // Chrome reports onstart a beat after start()
+    act(() => coach.end()); // the mic reopens, but status still reads "speaking"
+    expect(result.current.status).toBe("speaking");
+    const halfStarted = recHandlers;
+    const abortsBefore = abortCalls;
+
+    act(() => result.current.interrupt()); // the learner taps the hand in that gap
+    expect(abortCalls).toBe(abortsBefore + 1);
+    act(() => halfStarted.onStart());
+    act(() => halfStarted.onResult("ghost"));
+    expect(result.current.liveTranscript).toBe("");
+    expect(result.current.status).toBe("listening"); // on the newest recognizer
+  });
+
+  it("drops a late result from the recognizer it just paused", async () => {
+    const { result } = await mounted();
+    act(() => result.current.startListening());
+    const paused = recHandlers;
+    act(() => result.current.pause());
+    act(() => paused.onResult("late words"));
+    act(() => paused.onInterim("late tail"));
+    expect(result.current.liveTranscript).toBe("");
+    expect(result.current.status).toBe("idle");
+    await advance(5000);
+    expect(postTurn).not.toHaveBeenCalled();
+  });
+
+  it("keeps a late result out of the review draft once the take has been sent", async () => {
+    postTurn.mockRejectedValueOnce(new Error("boom"));
+    const { result } = await mounted();
+    act(() => result.current.startListening());
+    const sent = recHandlers;
+    act(() => recHandlers.onResult("hello"));
+    await advance(2000); // sends -> fails -> review
+    expect(result.current.status).toBe("review");
+    act(() => sent.onResult("late"));
+    expect(result.current.draft).toBe("hello");
+  });
+
+  it("aborts the recognizer when the hook unmounts mid-take", async () => {
+    const { result, unmount } = await mounted();
+    act(() => result.current.startListening());
+    unmount();
+    expect(abortCalls).toBe(1);
+  });
+
+  it("ignores a recognizer that only reports starting after the pause", async () => {
+    const { result } = await mounted();
+    act(() => result.current.startListening());
+    act(() => result.current.pause());
+    act(() => recHandlers.onStart()); // Chrome can report onstart late
+    expect(result.current.status).toBe("idle");
+  });
+
+  it("pausing while the coach speaks silences it and keeps the mic closed", async () => {
+    const coach = holdCoachAudio();
+    postTurn.mockResolvedValue({ coach_reply: "Nice", xp: 1, audio: "AAAA", audioFormat: "mp3" });
+    const { result } = await mounted();
+    act(() => result.current.startListening());
+    act(() => recHandlers.onResult("I went to the park yesterday"));
+    await advance(2000);
+    expect(result.current.status).toBe("speaking");
+
+    act(() => result.current.pause());
+    expect(coach.handle.pause).toHaveBeenCalled();
+    expect(result.current.status).toBe("idle");
+    act(() => coach.end()); // a late end event from the stopped audio
+    expect(result.current.status).toBe("idle");
+    expect(result.current.live).toBe(false);
+  });
+
+  it("pausing while the coach is thinking lets the reply play, then stays paused", async () => {
+    let resolveTurn;
+    postTurn.mockImplementation(() => new Promise((r) => { resolveTurn = r; }));
+    const { result } = await mounted();
+    act(() => result.current.startListening());
+    act(() => recHandlers.onResult("I went to the park yesterday"));
+    await advance(2000);
+    expect(result.current.status).toBe("thinking");
+
+    act(() => result.current.pause());
+    await act(async () => {
+      resolveTurn({ coach_reply: "Ok", xp: 1, audio: null });
+    });
+    expect(speak).toHaveBeenCalled();
+    expect(result.current.status).toBe("idle");
+  });
+
+  it("pauses by itself after 30 seconds without a word", async () => {
+    const { result } = await mounted();
+    act(() => result.current.startListening());
+    await advance(29999);
+    expect(result.current.status).toBe("listening");
+    await advance(1);
+    expect(result.current.status).toBe("idle");
+    expect(result.current.live).toBe(false);
+    expect(result.current.error).toMatch(/paused/i);
+  });
+
+  it("does not pause on someone who keeps talking", async () => {
+    const { result } = await mounted();
+    act(() => result.current.startListening());
+    for (let i = 0; i < 22; i += 1) {
+      await advance(1500);
+      act(() => recHandlers.onInterim(`word${i}`));
+    }
+    expect(result.current.status).toBe("listening");
+    expect(result.current.live).toBe(true);
+    expect(result.current.error).toBeNull();
+  });
+
+  it("a coach failure brings the take back for review; resending keeps the conversation going", async () => {
+    postTurn.mockRejectedValueOnce(new Error("boom"));
+    postTurn.mockResolvedValueOnce({ coach_reply: "Ok", xp: 1, audio: null });
+    const { result } = await mounted();
+    act(() => result.current.startListening());
+    act(() => recHandlers.onResult("I went to the park yesterday"));
+    await advance(2000);
+    expect(result.current.status).toBe("review");
+    expect(result.current.draft).toBe("I went to the park yesterday");
+    expect(result.current.live).toBe(true);
+
+    act(() => result.current.send());
+    await advance(0);
+    expect(result.current.status).toBe("listening"); // reply spoken, mic reopened
   });
 });
 

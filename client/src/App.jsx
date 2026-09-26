@@ -20,6 +20,12 @@ export default function App() {
   }, [c.messages, c.status, c.liveTranscript]);
 
   const busy = c.status === "thinking";
+  // Typing is only accepted from idle, and a live conversation is almost never
+  // idle — an enabled box would silently swallow what the learner typed.
+  const typingBlocked = busy || c.live;
+  let textPlaceholder = "…or type your reply";
+  if (c.live) textPlaceholder = "Pause the conversation to type";
+  else if (!c.sttSupported) textPlaceholder = "Type your reply (no mic detected)";
   const lastUserIndex = c.messages.findLastIndex((m) => m.role === "user");
   const micButtonRef = useRef(null);
   const prevStatusRef = useRef(c.status);
@@ -45,6 +51,13 @@ export default function App() {
     if (c.status === "listening") c.stopListening();
     else if (c.status === "speaking") c.interrupt();
     else if (c.status === "idle") c.startListening();
+  }
+
+  function handlePause() {
+    c.pause();
+    // The Pause button unmounts with the conversation; keep keyboard focus on
+    // the one control that can start it again.
+    micButtonRef.current?.focus();
   }
 
   function handleTextSubmit(e) {
@@ -109,21 +122,34 @@ export default function App() {
           />
         ) : (
           <>
-            <div className="flex justify-center">
+            <div className="grid grid-cols-[1fr_auto_1fr] items-start">
+              <span aria-hidden="true" />
               <MicButton ref={micButtonRef} status={c.status} onClick={handleMicClick} />
+              <div className="flex justify-start pl-4 pt-6">
+                {c.live && (
+                  <button
+                    type="button"
+                    onClick={handlePause}
+                    aria-label="Pause conversation"
+                    className="px-3 py-1.5 rounded-xl border border-line text-sm text-muted hover:text-ink hover:border-coach/60 transition"
+                  >
+                    Pause
+                  </button>
+                )}
+              </div>
             </div>
 
             <form onSubmit={handleTextSubmit} className="flex gap-2">
               <input
                 value={textInput}
                 onChange={(e) => setTextInput(e.target.value)}
-                disabled={busy}
-                placeholder={c.sttSupported ? "…or type your reply" : "Type your reply (no mic detected)"}
+                disabled={typingBlocked}
+                placeholder={textPlaceholder}
                 className="flex-1 bg-ink-2 border border-line rounded-xl px-4 py-2.5 text-sm placeholder:text-muted/70 focus:outline-none focus:ring-2 focus:ring-coach/50 disabled:opacity-50"
               />
               <button
                 type="submit"
-                disabled={busy || !textInput.trim()}
+                disabled={typingBlocked || !textInput.trim()}
                 className="px-4 py-2.5 rounded-xl bg-surface-2 border border-line text-sm font-medium hover:border-coach/60 hover:text-coach-soft transition disabled:opacity-40"
               >
                 Send

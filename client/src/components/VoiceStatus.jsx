@@ -1,6 +1,6 @@
 const STATUS_LABEL = {
   idle: "",
-  listening: "Listening… tap stop when you're done",
+  listening: "Listening… I'll send it when you go quiet",
   review: "Review and send",
   thinking: "Coach is composing a reply…",
   speaking: "Coach is speaking",

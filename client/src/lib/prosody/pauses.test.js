@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { detectPauses, PAUSE_MIN_MS } from "./pauses.js";
+import { detectPauses, voicedSpanMs, PAUSE_MIN_MS } from "./pauses.js";
 
 const HOP_MS = 10;
 
@@ -38,5 +38,29 @@ describe("detectPauses", () => {
 
   it("exposes the threshold as a named constant", () => {
     expect(PAUSE_MIN_MS).toBe(250);
+  });
+});
+
+describe("voicedSpanMs", () => {
+  it("spans first to last voiced hop, excluding leading and trailing silence", () => {
+    // 1.5s waiting to start, 3s of speech with a pause inside, 2s waiting for the turn to end.
+    const f = frames([1500, -70], [1000, -20], [400, -70], [1600, -20], [2000, -70]);
+    expect(voicedSpanMs(f, { hopMs: HOP_MS })).toBe(3000);
+  });
+
+  it("uses the same floor as detectPauses, so it is gain invariant too", () => {
+    const loud = frames([500, -70], [1000, -20], [500, -70]);
+    const quiet = loud.map((db) => db - 6);
+    expect(voicedSpanMs(quiet, { hopMs: HOP_MS })).toBe(voicedSpanMs(loud, { hopMs: HOP_MS }));
+  });
+
+  it("returns null when there is no speech/silence contrast to measure against", () => {
+    expect(voicedSpanMs(frames([2000, -20]), { hopMs: HOP_MS })).toBeNull();
+    expect(voicedSpanMs(frames([2000, -70]), { hopMs: HOP_MS })).toBeNull();
+  });
+
+  it("returns null for an empty buffer or a missing hop", () => {
+    expect(voicedSpanMs(new Float32Array(0), { hopMs: HOP_MS })).toBeNull();
+    expect(voicedSpanMs(frames([500, -70], [500, -20]), { hopMs: 0 })).toBeNull();
   });
 });

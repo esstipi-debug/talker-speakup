@@ -17,9 +17,10 @@ import {
   stopFrames,
   getCaptureSettings,
 } from "../lib/micStream.js";
-import { detectPauses } from "../lib/prosody/pauses.js";
+import { detectPauses, voicedSpanMs } from "../lib/prosody/pauses.js";
 import { classifyPauses, summarise } from "../lib/prosody/placement.js";
 import { pauseSentence } from "../lib/prosody/summary.js";
+import { silenceWindowMs } from "../lib/turnEnd.js";
 
 const GREETING =
   "Hi! I'm your SpeakUp coach. Tap the mic and tell me about your day — let's practice some English.";
@@ -27,6 +28,13 @@ const GREETING =
 const MAX_LISTEN_MS = 120000; // hard cap so a stuck session can't listen forever
 const MAX_EMPTY_RESTARTS = 6; // guard against tight restart loops on a silent/broken mic
 const NO_SPEECH_MSG = "Didn't catch that — try again or type.";
+/**
+ * UNCALIBRATED — hands-free: listening this long without a single word pauses
+ * the conversation. Web Speech streams the room to Google (Microsoft on Edge)
+ * the whole time the mic is open.
+ */
+const IDLE_PAUSE_MS = 30000;
+const IDLE_PAUSE_MSG = `Paused after ${IDLE_PAUSE_MS / 1000} seconds of silence — tap the mic to keep talking.`;
 /** UNCALIBRATED — spec §7.4: at most one pause note per this many turns. */
 const PAUSE_NOTE_TURN_INTERVAL = 3;
 
@@ -52,11 +60,17 @@ function ttsFailed(ttsProvider, audio) {
 /**
  * Owns the whole conversation loop: providers, the turn round-trip, a single
  * playback controller for the coach voice, and the speech capture state
- * machine (idle -> listening -> review -> thinking -> speaking -> idle).
+ * machine. Hands-free (voice spec, Addendum A): one tap starts a conversation
+ * that runs listening -> thinking -> speaking -> listening … until it is
+ * paused; a silence ends each take. `review` only appears when a send fails.
  */
 export function useConversation() {
   const [messages, setMessages] = useState([{ id: 0, role: "coach", text: GREETING }]);
   const [status, setStatus] = useState("idle");
+  // True while the hands-free conversation runs: from the tap that opens the
+  // mic until a pause, a typed turn's end, or an error. The mic reopens after
+  // the coach speaks only while this holds.
+  const [live, setLive] = useState(false);
   const [draft, setDraft] = useState(""); // finalized text, then editable in review
   const [interim, setInterim] = useState(""); // live non-final tail during listening
   const [totalXp, setTotalXp] = useState(0);
@@ -118,12 +132,57 @@ export function useConversation() {
   const interimRef = useRef("");
   const messagesRef = useRef(messages);
   const providersRef = useRef(providers);
+  const liveRef = useRef(false);
+  const silenceTimerRef = useRef(null); // ends the take once the learner goes quiet
+  const idleTimerRef = useRef(null); // pauses the conversation when nobody talks at all
+  const lastHeardRef = useRef(""); // latest words from the recognizer, for the dangling check
+  // Bumped by every stop and every ending, so a playback that was stopped,
+  // interrupted or already ended can never end the turn a second time.
+  const playbackTokenRef = useRef(0);
 
-  useEffect(() => { statusRef.current = status; }, [status]);
   useEffect(() => { draftRef.current = draft; }, [draft]);
   useEffect(() => { interimRef.current = interim; }, [interim]);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
   useEffect(() => { providersRef.current = providers; }, [providers]);
+
+  // Every status change goes through here, and statusRef is written nowhere
+  // else. The hands-free loop chains transitions inside a single batch
+  // (thinking -> speaking -> idle when the browser voice ends synchronously);
+  // an effect-synced ref would miss a batch that ends on the status already
+  // rendered, and stay stuck on the intermediate value.
+  function setStatusNow(next) {
+    statusRef.current = next;
+    setStatus(next);
+  }
+
+  function setLiveNow(next) {
+    liveRef.current = next;
+    setLive(next);
+  }
+
+  function clearTurnTimers() {
+    clearTimeout(silenceTimerRef.current);
+    clearTimeout(idleTimerRef.current);
+    silenceTimerRef.current = null;
+    idleTimerRef.current = null;
+  }
+
+  /** Leaves the hands-free loop: no timers, and the mic stays closed until the next tap. */
+  function endConversation() {
+    setLiveNow(false);
+    clearTurnTimers();
+  }
+
+  /**
+   * The current recognizer is only ever the one listening right now. Every way
+   * out of a take lets go of it — aborted (harmless once it has ended) and no
+   * longer current — so its late events, which Chrome can deliver after an
+   * abort, fall through the isCurrent() guard in startListening.
+   */
+  function releaseRecognizer() {
+    recognizerRef.current?.abort?.();
+    recognizerRef.current = null;
+  }
 
   // Shared by the opener response and every turn response (spec: same edge
   // logic both places, not a second copy of it). A refresh fires only when
@@ -200,11 +259,19 @@ export function useConversation() {
         }
       });
     }
-    return () => { isMountedRef.current = false; };
+    return () => {
+      isMountedRef.current = false;
+      // A timer, a coach voice or a recognizer outliving the hook would keep
+      // listening — and streaming to the speech service — for nobody.
+      clearTurnTimers();
+      stopPlayback();
+      releaseRecognizer();
+    };
   }, []);
 
   // ---------------- playback controller ----------------
   function stopPlayback() {
+    playbackTokenRef.current += 1;
     if (currentAudioRef.current) {
       currentAudioRef.current.pause();
       currentAudioRef.current = null;
@@ -215,14 +282,22 @@ export function useConversation() {
 
   function playCoach(text, audio, audioFormat) {
     clearTimeout(speakTimerRef.current);
-    setStatus("speaking");
-    const toIdle = () => setStatus((s) => (s === "speaking" ? "idle" : s));
-    const fallbackMs = Math.max(4000, text.split(/\s+/).length * 450 + 2500);
-    speakTimerRef.current = setTimeout(toIdle, fallbackMs);
+    const token = ++playbackTokenRef.current;
+    setStatusNow("speaking");
+    // Whichever ending fires first wins: the audio's own end, the browser
+    // voice's end, or the timeout for an end that is never reported.
     const done = () => {
+      if (token !== playbackTokenRef.current) return;
+      playbackTokenRef.current += 1;
       clearTimeout(speakTimerRef.current);
-      toIdle();
+      // Hands-free: the mic reopens only now, never over the coach's voice —
+      // our own capture runs with echo cancellation off (micStream.js).
+      // startListening() also stops any audio still playing past the timeout.
+      if (liveRef.current) startListening();
+      else setStatusNow("idle");
     };
+    const fallbackMs = Math.max(4000, text.split(/\s+/).length * 450 + 2500);
+    speakTimerRef.current = setTimeout(done, fallbackMs);
     if (audio) {
       currentAudioRef.current = playAudio(audio, {
         format: audioFormat,
@@ -240,7 +315,7 @@ export function useConversation() {
     const userMsg = { id: nextMsgIdRef.current++, role: "user", text: utterance, feedback: null };
     const historyBefore = messagesRef.current;
     setMessages((prev) => [...prev, userMsg]);
-    setStatus("thinking");
+    setStatusNow("thinking");
     // Read at the moment the turn is actually sent — not when it was merely
     // recorded — so a re-recorded or cancelled take never reaches here at all.
     const prosody = lastTurnProsodyRef.current;
@@ -304,7 +379,7 @@ export function useConversation() {
       setMessages((prev) => prev.filter((m) => m.id !== userMsg.id));
       setError(err.message || "The coach brain failed to respond.");
       setDraft(utterance);
-      setStatus("review");
+      setStatusNow("review");
     }
   }
 
@@ -338,19 +413,25 @@ export function useConversation() {
   function computePauseProfile() {
     const frames = getFrames();
     stopFrames(); // measurement window is over — stop the worklet handler from growing the buffer further
-    const pauses = detectPauses(frames, { hopMs: getHopMs() });
+    const hopMs = getHopMs();
+    const pauses = detectPauses(frames, { hopMs });
     const classified = classifyPauses(pauses, finalizationsRef.current);
     const counts = summarise(classified);
-    // Phonation = elapsed capture minus measured silence (spec §6.2). This
-    // OVERSTATES phonation — leading/trailing silence and sub-250ms gaps
-    // below detectPauses' floor are booked as speech — a measurement
-    // question for a later milestone, not fixed here; treat the resulting
-    // rate as indicative, not precise. Computed here (this is the only place
-    // with the frame contour) but carried on lastTurnProsodyRef rather than
+    // Phonation = the voiced span minus the silences measured inside it (spec
+    // §6.2). The span runs from the first voiced hop to the last, so neither
+    // the wait before the learner starts nor the silence that ends a
+    // hands-free take is booked as speech — seconds of each on every turn
+    // would drag the articulation rate toward the target and hide a fast
+    // speaker (delivery.js). Gaps below detectPauses' 250ms floor still count
+    // as speech: treat the rate as indicative, not precise. With no
+    // speech/silence contrast, or no capture at all, it falls back to the
+    // elapsed capture time. Computed here (this is the only place with the
+    // frame contour) but carried on lastTurnProsodyRef rather than
     // accumulated directly: this function runs on every recording end,
-    // including takes the learner then cancels or re-records, and the
-    // session tally must only count what was actually sent (see runTurn).
-    const phonationMs = Math.max(0, micNowMs() - pauses.reduce((ms, p) => ms + p.durationMs, 0));
+    // including takes whose send fails and are then cancelled or re-recorded,
+    // and the session tally must only count what was actually sent (see runTurn).
+    const spanMs = voicedSpanMs(frames, { hopMs }) ?? micNowMs();
+    const phonationMs = Math.max(0, spanMs - pauses.reduce((ms, p) => ms + p.durationMs, 0));
     // The session tally is NOT touched here: it only accumulates once the
     // learner actually sends the turn (see runTurn) — otherwise a re-recorded
     // or cancelled take would be counted before the learner ever decided.
@@ -368,14 +449,19 @@ export function useConversation() {
   }
 
   function finishListening(announceEmpty) {
+    clearTurnTimers();
+    releaseRecognizer();
     computePauseProfile();
     const combined = `${draftRef.current} ${interimRef.current}`.trim();
     setInterim("");
+    setDraft("");
     if (combined) {
-      setDraft(combined);
-      setStatus("review");
+      // Sent exactly as heard: there is no review step (the learner's call,
+      // voice spec Addendum A). Review only comes back when the send fails.
+      runTurn(combined);
     } else {
-      setStatus("idle");
+      endConversation();
+      setStatusNow("idle");
       if (announceEmpty) setError(NO_SPEECH_MSG);
     }
   }
@@ -399,7 +485,9 @@ export function useConversation() {
     if (fatalRef.current) {
       fatalRef.current = false;
       setInterim("");
-      setStatus("idle");
+      releaseRecognizer();
+      endConversation();
+      setStatusNow("idle");
       return;
     }
     const overTime = Date.now() - listenStartRef.current > MAX_LISTEN_MS;
@@ -423,44 +511,91 @@ export function useConversation() {
     }, 0);
   }
 
+  // Every recognizer event that carries words restarts the silence clock that
+  // ends the take; how long it runs depends on how the words so far end.
+  function heard(text) {
+    if (text) lastHeardRef.current = text;
+    if (!lastHeardRef.current) return; // nothing said yet — the idle pause is in charge
+    clearTimeout(idleTimerRef.current);
+    clearTimeout(silenceTimerRef.current);
+    silenceTimerRef.current = setTimeout(stopListening, silenceWindowMs(lastHeardRef.current));
+  }
+
+  function pauseForSilence() {
+    if (statusRef.current !== "listening" || lastHeardRef.current) return;
+    pause();
+    setError(IDLE_PAUSE_MSG);
+  }
+
   function startListening() {
     if (statusRef.current === "listening" || statusRef.current === "thinking") return;
     stopPlayback();
+    clearTurnTimers();
+    setLiveNow(true); // any tap that opens the mic starts, or continues, the conversation
     setError(null);
     setDraft("");
     setInterim("");
+    lastHeardRef.current = "";
     userStoppedRef.current = false;
     fatalRef.current = false;
     emptyRestartsRef.current = 0;
     listenStartRef.current = Date.now();
     finalizationsRef.current = [];
-    setPauseNote(null);
+    // The pause note is deliberately NOT cleared here: hands-free reopens the
+    // mic seconds after a take, and the note would vanish before anyone could
+    // read it. The next take's computePauseProfile replaces it.
     resetFrames();
     getMicStream().catch(() => { /* capture is optional; the turn still works */ });
-    const rec = createRecognizer({
-      onStart: () => setStatus("listening"),
+    // The mic reopens a beat after the coach's voice ends, while status still
+    // reads "speaking" — a tap in that gap lands here again. Only the newest
+    // recognizer may speak: the old one is aborted, and its late events dropped.
+    releaseRecognizer();
+    let rec = null;
+    const isCurrent = () => rec !== null && recognizerRef.current === rec;
+    rec = createRecognizer({
+      // A pause can land between start() and Chrome's onstart; a late onstart
+      // must not bring back a conversation the learner just paused.
+      onStart: () => {
+        if (isCurrent() && liveRef.current) setStatusNow("listening");
+      },
       onResult: (chunk) => {
+        if (!isCurrent()) return;
         emptyRestartsRef.current = 0;
         finalizationsRef.current.push({ tMs: micNowMs(), text: chunk });
         setDraft((d) => `${d} ${chunk}`.trim());
+        heard(chunk);
       },
-      onInterim: (tail) => setInterim(tail),
-      onError: (code) => handleSpeechError(code),
-      onEnd: () => handleRecognizerEnd(),
+      onInterim: (tail) => {
+        if (!isCurrent()) return;
+        setInterim(tail);
+        heard(tail);
+      },
+      onError: (code) => {
+        if (isCurrent()) handleSpeechError(code);
+      },
+      onEnd: () => {
+        if (isCurrent()) handleRecognizerEnd();
+      },
     });
     if (!rec) {
+      endConversation();
       setError("Speech recognition isn't supported here — use the text box (Chrome/Edge work best).");
-      setStatus("idle");
+      setStatusNow("idle");
       return;
     }
     recognizerRef.current = rec;
     try {
       rec.start();
     } catch {
-      setStatus("idle");
+      releaseRecognizer();
+      endConversation();
+      setStatusNow("idle");
+      return;
     }
+    idleTimerRef.current = setTimeout(pauseForSilence, IDLE_PAUSE_MS);
   }
 
+  /** Send-now: ends the take at once. The silence clock calls it too. */
   function stopListening() {
     if (statusRef.current !== "listening") return;
     userStoppedRef.current = true;
@@ -479,7 +614,8 @@ export function useConversation() {
     if (statusRef.current !== "review") return;
     const t = draftRef.current.trim();
     if (!t) {
-      setStatus("idle");
+      endConversation();
+      setStatusNow("idle");
       return;
     }
     setDraft("");
@@ -495,14 +631,38 @@ export function useConversation() {
 
   function cancel() {
     if (statusRef.current !== "review") return;
-    recognizerRef.current?.abort?.();
+    releaseRecognizer();
+    endConversation();
     setDraft("");
     setInterim("");
     setError(null);
-    setStatus("idle");
+    setStatusNow("idle");
     // This take is discarded forever — never let it surface as the prosody
     // for some later, unrelated turn (e.g. one typed instead of recorded).
     lastTurnProsodyRef.current = null;
+  }
+
+  /**
+   * Stops the hands-free conversation now. An unfinished take is discarded —
+   * not sent, not measured — and a coach mid-reply is silenced. While the coach
+   * is still thinking, its reply lands and plays; the mic just stays closed.
+   * (Review has its own Cancel; the Pause control isn't shown there.)
+   */
+  function pause() {
+    if (!liveRef.current) return;
+    endConversation();
+    releaseRecognizer(); // also stops one still starting up
+    stopFrames();
+    const s = statusRef.current;
+    if (s === "listening") {
+      lastTurnProsodyRef.current = null;
+      setDraft("");
+      setInterim("");
+      setStatusNow("idle");
+    } else if (s === "speaking") {
+      stopPlayback();
+      setStatusNow("idle");
+    }
   }
 
   function interrupt() {
@@ -514,6 +674,9 @@ export function useConversation() {
   function submitText(text) {
     const t = text?.trim();
     if (statusRef.current !== "idle" || !t) return;
+    // The note belongs to the last SPOKEN take. PauseNote renders under
+    // whichever user turn is last, so a typed turn would otherwise inherit it.
+    setPauseNote(null);
     runTurn(t);
   }
 
@@ -530,6 +693,7 @@ export function useConversation() {
   return {
     messages,
     status,
+    live,
     draft,
     interim,
     liveTranscript: `${draft} ${interim}`.trim(),
@@ -548,6 +712,7 @@ export function useConversation() {
     send,
     reRecord,
     cancel,
+    pause,
     interrupt,
     submitText,
     replay,
